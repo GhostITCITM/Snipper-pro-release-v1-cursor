@@ -1,0 +1,14 @@
+node_modules/
+*.log
+*.pfx
+cert.pem
+key.pem
+.env
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+dist/
+build/
+.vscode/
+.idea/ 
