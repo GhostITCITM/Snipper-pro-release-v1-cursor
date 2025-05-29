@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vstav3:application 
+  xmlns:vstav3="urn:schemas-microsoft-com:vsta.v3">
+  <vstav3:customizations 
+    xmlns:vstov4="urn:schemas-microsoft-com:vsto.v4">
+    <vstov4:customization>
+      <vstov4:appAddIn 
+        application="Excel" 
+        loadBehavior="3" 
+        keyName="SnipperClone">
+        <vstov4:friendlyName>SnipperClone</vstov4:friendlyName>
+        <vstov4:description>DataSnipper Clone - Document Analysis Excel Add-in</vstov4:description>
+      </vstov4:appAddIn>
+    </vstov4:customization>
+  </vstav3:customizations>
+</vstav3:application> 

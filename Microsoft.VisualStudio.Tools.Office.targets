@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Minimal Office Tools targets file for SnipperClone -->
+  
+  <PropertyGroup>
+    <OfficeToolsAvailable>true</OfficeToolsAvailable>
+  </PropertyGroup>
+  
+  <!-- Define empty targets to prevent build errors -->
+  <Target Name="PrepareForBuild" />
+  <Target Name="BeforeBuild" />
+  <Target Name="AfterBuild" />
+  <Target Name="Clean" />
+  <Target Name="Rebuild" DependsOnTargets="Clean;Build" />
+  
+  <!-- Office-specific properties -->
+  <PropertyGroup Condition="'$(OfficeApplication)' == 'Excel'">
+    <TargetOfficeVersion>15.0</TargetOfficeVersion>
+  </PropertyGroup>
+  
+</Project> 
