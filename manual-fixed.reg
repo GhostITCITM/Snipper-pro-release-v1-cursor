@@ -1,0 +1,39 @@
+REGEDIT4
+
+[HKEY_CLASSES_ROOT\SnipperClone.AddIn]
+@="SnipperCloneCleanFinal.ThisAddIn"
+
+[HKEY_CLASSES_ROOT\SnipperClone.AddIn\CLSID]
+@="{D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}"
+
+[HKEY_CLASSES_ROOT\CLSID\{D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}]
+@="SnipperCloneCleanFinal.ThisAddIn"
+
+[HKEY_CLASSES_ROOT\CLSID\{D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}\InprocServer32]
+@="C:\\Windows\\System32\\mscoree.dll"
+"ThreadingModel"="Both"
+"Class"="SnipperCloneCleanFinal.ThisAddIn"
+"Assembly"="SnipperCloneCleanFinal, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+"RuntimeVersion"="v4.0.30319"
+"CodeBase"="file:///C:/Users/piete/AppData/Local/SnipperPro/SnipperClone.dll"
+
+[HKEY_CLASSES_ROOT\CLSID\{D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}\InprocServer32\1.0.0.0]
+"Class"="SnipperCloneCleanFinal.ThisAddIn"
+"Assembly"="SnipperCloneCleanFinal, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+"RuntimeVersion"="v4.0.30319"
+"CodeBase"="file:///C:/Users/piete/AppData/Local/SnipperPro/SnipperClone.dll"
+
+[HKEY_CLASSES_ROOT\CLSID\{D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}\ProgId]
+@="SnipperClone.AddIn"
+
+[HKEY_CLASSES_ROOT\CLSID\{D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}\Implemented Categories\{62C8FE65-4EBB-45E7-B440-6E39B2CDBF29}]
+
+[HKEY_CLASSES_ROOT\Record\{289E9AF1-4973-11D1-AE81-00A0C90F26F4}\1.0.0.0]
+"Class"="Extensibility.ext_ConnectMode"
+"Assembly"="SnipperCloneCleanFinal, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+"RuntimeVersion"="v4.0.30319"
+
+[HKEY_CLASSES_ROOT\Record\{289E9AF2-4973-11D1-AE81-00A0C90F26F4}\1.0.0.0]
+"Class"="Extensibility.ext_DisconnectMode"
+"Assembly"="SnipperCloneCleanFinal, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+"RuntimeVersion"="v4.0.30319" 
