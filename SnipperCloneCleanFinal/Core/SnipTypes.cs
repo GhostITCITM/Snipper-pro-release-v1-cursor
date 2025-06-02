@@ -79,7 +79,6 @@ namespace SnipperCloneCleanFinal.Core
         public string[] Numbers { get; set; }
         public double Sum { get; set; }
         public TableData TableData { get; set; }
-        public List<OCRBoundingBox> BoundingBoxes { get; set; }
 
         public OCRResult()
         {
@@ -89,7 +88,6 @@ namespace SnipperCloneCleanFinal.Core
             Numbers = new string[0];
             Confidence = 0.0;
             Sum = 0.0;
-            BoundingBoxes = new List<OCRBoundingBox>();
         }
     }
 

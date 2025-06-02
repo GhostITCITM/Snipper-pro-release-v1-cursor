@@ -1,102 +1,70 @@
-# Snipper Pro Excel Add-in
+# Snipper Pro - DataSnipper Clone
 
-A professional Excel COM add-in that provides document analysis and data extraction capabilities.
+A powerful Excel add-in for extracting data from PDFs and images, designed for audit and finance professionals.
 
-## 🚀 Installation
+## Features
 
-### Prerequisites
-- Windows 10/11
-- Microsoft Excel 2016 or later (64-bit)
-- .NET Framework 4.8
-- Visual Studio 2022 or Build Tools for Visual Studio 2022
+- **Real OCR Engine**: Extract text and numbers from images and PDFs
+- **Multiple Snip Types**: Text, Sum, Table, Validation, and Exception snips
+- **Excel Integration**: Full ribbon interface with DataSnipper-style formulas
+- **Document Viewer**: Load and manage multiple documents simultaneously
+- **Visual Selection**: Draw rectangles to select data regions
+- **Professional UI**: Modern interface with color-coded content
 
-### Installation Steps
+## Installation
 
-1. **Build the Project**
-   ```powershell
-   # Run in PowerShell
+1. **Build the project**:
+   ```
    .\build-snipper-pro.ps1
    ```
-   This script will automatically locate MSBuild and build the project.
 
-2. **Install the Add-in**
-   ```powershell
-   # Run PowerShell as Administrator
-   .\install-snipper-pro.ps1
+2. **Install (as Administrator)**:
+   ```
+   .\install-snipper-pro-complete.ps1
    ```
 
-3. **Verify in Excel**
-   - Open Excel
-   - Go to File > Options > Add-ins
-   - Select 'COM Add-ins' and click 'Go...'
-   - Check 'Snipper Pro' and click OK
-   - Look for 'SNIPPER PRO' tab in the ribbon
-
-### Troubleshooting
-
-If the build fails:
-1. Install Visual Studio 2022 or Build Tools for Visual Studio 2022
-2. Ensure .NET Framework 4.8 SDK is installed
-3. Try running Developer PowerShell for VS 2022 manually:
-   ```powershell
-   # In Developer PowerShell for VS 2022
-   msbuild SnipperCloneCleanFinal.csproj /p:Configuration=Release /p:Platform=x64
+3. **Register COM components**:
+   ```
+   .\REGISTER_NOW.bat
    ```
 
-If the add-in doesn't appear:
-1. Check Windows Event Viewer for .NET Runtime errors
-2. Verify the add-in is enabled in Excel's COM Add-ins dialog
-3. Try running Excel as Administrator once
-4. Check that the DLL exists at `C:\Program Files\SnipperPro\SnipperCloneCleanFinal.dll`
+4. **Verify installation**:
+   ```
+   .\verify-installation.ps1
+   ```
 
-## 📋 Features
+## Usage
 
-The add-in provides a "SNIPPER PRO" tab with the following functionality:
+1. Open Excel
+2. Look for "SNIPPER PRO" tab in ribbon
+3. Click "Open Viewer" to load documents
+4. Select snip mode (Text/Sum/Table/Validation/Exception)
+5. Draw rectangles on documents to extract data
+6. Data appears in Excel with DS formulas
 
-- **Text Snip**: Extract text from selected areas using OCR
-- **Sum Snip**: Extract and sum numerical values
-- **Table Snip**: Extract structured table data
-- **Validation**: Mark cells as validated (✓)
-- **Exception**: Mark cells as exceptions (✗)
+## Project Structure
 
-## 🔧 Technical Details
+- `SnipperCloneCleanFinal/` - Main C# project source code
+- `packages/` - NuGet packages and dependencies
+- `SnipperPro.snk` - Strong name key for signing
+- Build and installation scripts
 
-### COM Registration
-```
-CLSID: {D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111}
-ProgID: SnipperPro.Connect
-Class: SnipperCloneCleanFinal.ThisAddIn
-```
+## Requirements
 
-### Registry Location
-```
-HKCU:\Software\Microsoft\Office\Excel\Addins\SnipperPro.Connect
-```
+- .NET Framework 4.8
+- Microsoft Excel (COM Interop)
+- Windows with PowerShell execution policy enabled
 
-### Installation Directory
-```
-C:\Program Files\SnipperPro\
-```
+## Architecture
 
-## 🛠️ Development
+Built as a C# .NET Framework COM add-in with GUID: `D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111`
 
-### Build Requirements
-- Visual Studio 2022
-- Office Development Tools for Visual Studio
-- .NET Framework 4.8 SDK
-- Microsoft Office (Excel) 2016+ (64-bit)
+Core components:
+- **OCREngine**: Real text extraction from images
+- **DocumentViewer**: PDF and image display
+- **SnippingEngine**: Data extraction and Excel integration
+- **RibbonInterface**: Excel ribbon UI
 
-### Project Structure
-- Pure COM add-in (no VSTO)
-- Implements `IDTExtensibility2` and `IRibbonExtensibility`
-- Custom ribbon UI via XML
-- Windows Forms for document viewer
+---
 
-### Dependencies
-- Microsoft.Office.Interop.Excel (16.0)
-- Microsoft.Office.Core (16.0)
-- System.Windows.Forms
-
-## 📝 License
-
-Copyright © 2024. All rights reserved. 
+*DataSnipper-compatible Excel add-in for professional document analysis* 

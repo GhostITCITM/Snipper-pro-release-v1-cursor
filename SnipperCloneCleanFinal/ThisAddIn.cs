@@ -384,10 +384,32 @@ namespace SnipperCloneCleanFinal
                     case SnipMode.Table:
                         if (e.Success && !string.IsNullOrEmpty(e.ExtractedText))
                         {
-                            // For table snips, display the extracted text
-                            displayValue = e.ExtractedText;
-                            formula = DataSnipperFormulas.CreateTextFormula(e.DocumentPath, e.PageNumber, 
-                                e.ExtractedText, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                            // For table snips, split by tabs and place in multiple cells
+                            var columns = e.ExtractedText.Split('\t');
+                            for (int i = 0; i < columns.Length; i++)
+                            {
+                                var cellToFill = activeCell.Offset[0, i];
+                                cellToFill.Value2 = columns[i].Trim();
+                                cellToFill.Borders.Color = GetSnipColorCode(e.SnipMode);
+                                
+                                // Add comment with source info
+                                try
+                                {
+                                    cellToFill.ClearComments();
+                                    var comment = cellToFill.AddComment($"Source: {Path.GetFileName(e.DocumentPath)}\nPage: {e.PageNumber}\nColumn {i+1} of table");
+                                    comment.Shape.TextFrame.AutoSize = true;
+                                }
+                                catch { }
+                            }
+                            displayValue = "Table extracted: " + columns.Length + " columns";
+                            
+                            // Move to next row after table extraction
+                            try
+                            {
+                                var nextRow = activeCell.Offset[1, 0];
+                                nextRow.Select();
+                            }
+                            catch { }
                         }
                         else
                         {
@@ -408,17 +430,20 @@ namespace SnipperCloneCleanFinal
                         break;
                 }
                 
-                // Insert the formula and value into Excel
-                if (!string.IsNullOrEmpty(displayValue))
+                // Insert the value into Excel (except for table which handles its own cells)
+                if (!string.IsNullOrEmpty(displayValue) && e.SnipMode != SnipMode.Table)
                 {
-                    // Set the value first
-                    activeCell.Value = displayValue;
+                    // Set the value directly
+                    activeCell.Value2 = displayValue;
                     
-                    // Set the formula if we have one (contains reference to source)
-                    if (!string.IsNullOrEmpty(formula))
+                    // Add comment with source info instead of formula
+                    try
                     {
-                        activeCell.Formula = formula;
+                        activeCell.ClearComments();
+                        var comment = activeCell.AddComment($"Source: {Path.GetFileName(e.DocumentPath)}\nPage: {e.PageNumber}\nSnip Type: {e.SnipMode}");
+                        comment.Shape.TextFrame.AutoSize = true;
                     }
+                    catch { }
                     
                     // Add visual indicator (border color)
                     var color = GetSnipColorCode(e.SnipMode);
@@ -426,9 +451,25 @@ namespace SnipperCloneCleanFinal
                     
                     Logger.Info($"{e.SnipMode} snip completed successfully - Value: {displayValue}");
                     
-                    // Show success message
-                    MessageBox.Show($"{e.SnipMode} Snip Complete!\nExtracted: {displayValue}", 
-                        "Snipper Pro", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // Move to next cell automatically for continuous workflow
+                    try
+                    {
+                        // Move down one cell after each snip
+                        var nextCell = activeCell.Offset[1, 0];
+                        nextCell.Select();
+                    }
+                    catch
+                    {
+                        // If we can't move down (last row), stay on current cell
+                    }
+                    
+                    // Keep document viewer on top
+                    _documentViewer.BringToFront();
+                }
+                else if (e.SnipMode == SnipMode.Table)
+                {
+                    // Table already handled above
+                    _documentViewer.BringToFront();
                 }
                 else
                 {
@@ -439,8 +480,8 @@ namespace SnipperCloneCleanFinal
                 // Highlight the region in the document viewer  
                 _documentViewer.HighlightRegion(e.Bounds, GetSnipColor(e.SnipMode));
                 
-                // Reset snip mode
-                _documentViewer.SetSnipMode(e.SnipMode, false);
+                // Don't reset snip mode - keep it active for continuous snipping
+                // _documentViewer.SetSnipMode(e.SnipMode, false);
             }
             catch (Exception ex)
             {

@@ -56,6 +56,16 @@ if (!(Test-Path $projectFile)) {
     exit 1
 }
 
+$nugetExe = "$PSScriptRoot\nuget.exe"
+if (!(Test-Path $nugetExe)) {
+    Write-Host "Downloading nuget.exe..." -ForegroundColor Yellow
+    Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile $nugetExe
+}
+
+# After changing directory, restore
+Write-Host "Restoring NuGet packages..." -ForegroundColor Yellow
+& $nugetExe restore "packages.config" -PackagesDirectory "..\packages" | Out-Null
+
 # Build the project
 Write-Host "`nBuilding project..." -ForegroundColor Yellow
 $buildArgs = @(
@@ -71,11 +81,26 @@ $buildArgs = @(
 if ($LASTEXITCODE -eq 0) {
     # Verify the output DLL exists
     $outputDll = "bin\Release\SnipperCloneCleanFinal.dll"
+    $outputDllDir = Split-Path $outputDll -Parent
     if (Test-Path $outputDll) {
         Write-Host "`n✅ Build completed successfully!" -ForegroundColor Green
         Write-Host "Output DLL: $outputDll" -ForegroundColor Green
         Write-Host "`nNext steps:" -ForegroundColor Cyan
         Write-Host "1. Run install-snipper-pro.ps1 as Administrator to install the add-in" -ForegroundColor White
+
+        # Copy native Pdfium DLLs
+        $packageRoot = "..\packages"
+        $x86Dll = Get-ChildItem -Path $packageRoot -Recurse -Filter pdfium.dll | Where-Object { $_.FullName -match "x86.no_v8" -and $_.FullName -notmatch "x86_64" } | Select-Object -First 1
+        $x64Dll = Get-ChildItem -Path $packageRoot -Recurse -Filter pdfium.dll | Where-Object { $_.FullName -match "x86_64.no_v8" } | Select-Object -First 1
+        if ($x64Dll) {
+            Copy-Item $x64Dll.FullName "$outputDllDir\pdfium.dll" -Force
+            Write-Host "Copied x64 pdfium.dll to output directory" -ForegroundColor Green
+        } elseif ($x86Dll) {
+            Copy-Item $x86Dll.FullName "$outputDllDir\pdfium.dll" -Force
+            Write-Host "Copied x86 pdfium.dll to output directory" -ForegroundColor Green
+        } else {
+            Write-Host "WARNING: Pdfium native DLLs not found; PDF rendering will fail" -ForegroundColor Red
+        }
     } else {
         Write-Host "`n❌ Build succeeded but output DLL not found at: $outputDll" -ForegroundColor Red
         exit 1
@@ -83,4 +108,4 @@ if ($LASTEXITCODE -eq 0) {
 } else {
     Write-Host "`n❌ Build failed with exit code: $LASTEXITCODE" -ForegroundColor Red
     exit $LASTEXITCODE
-} 
+}

@@ -17,7 +17,12 @@ if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 try {
     # Stop Excel if running
     Write-Host "Stopping Excel processes..." -ForegroundColor Yellow
-    Get-Process -Name "EXCEL" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    try {
+        Stop-Process -Name EXCEL -Force -Wait
+        Write-Host "Excel closed successfully" -ForegroundColor Green
+    } catch {
+        Write-Host "Excel was not running or already closed" -ForegroundColor Yellow
+    }
     Start-Sleep -Seconds 3
 
     # Verify build
@@ -87,7 +92,17 @@ try {
         $files = Get-ChildItem -Path $binDir -Filter $dep -ErrorAction SilentlyContinue
         foreach ($file in $files) {
             Copy-Item -Path $file.FullName -Destination $programFilesDir -Force
+            Write-Host "✓ Copied $($file.Name)" -ForegroundColor Green
         }
+    }
+
+    # Specifically ensure pdfium.dll is copied
+    $pdfiumPath = Join-Path $binDir "pdfium.dll"
+    if (Test-Path $pdfiumPath) {
+        Copy-Item -Path $pdfiumPath -Destination $programFilesDir -Force
+        Write-Host "✓ Copied pdfium.dll (native PDF renderer)" -ForegroundColor Green
+    } else {
+        Write-Host "⚠ WARNING: pdfium.dll not found - PDF rendering will not work!" -ForegroundColor Red
     }
 
     # Update DLL path to Program Files location

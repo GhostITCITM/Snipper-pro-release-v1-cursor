@@ -1,31 +1,20 @@
 @echo off
-echo ========================================
-echo Testing Snipper Pro Excel Add-in
-echo ========================================
 echo.
-
-echo Opening Excel...
-start excel
-
+echo === TESTING SNIPPER PRO FUNCTIONALITY ===
 echo.
-echo INSTRUCTIONS FOR TESTING:
-echo ========================================
-echo 1. Look for "SNIPPER PRO" tab in Excel ribbon
-echo 2. Click "Open Viewer" to load documents
-echo 3. Select image files (PNG, JPG, etc.) or PDFs
-echo 4. Use the snip buttons:
-echo    - Text Snip (Blue) - Extract text
-echo    - Sum Snip (Purple) - Extract and sum numbers  
-echo    - Table Snip (Purple) - Extract table data
-echo    - Validation (Green) - Mark as validated
-echo    - Exception (Red) - Mark as exception
+echo Please verify in Excel:
 echo.
-echo 5. Select a cell in Excel first
-echo 6. Draw rectangles on document to extract data
-echo 7. Watch as real text/numbers appear in Excel!
+echo 1. SNIPPER PRO tab is visible in ribbon
+echo 2. Open Viewer button works
+echo 3. Load a PDF document
+echo 4. Click Text Snip - draw rectangle on PDF
+echo    - Data should appear in current Excel cell
+echo    - Cursor should move to next cell automatically
+echo    - Document viewer should stay on top
+echo 5. Keep snipping without clicking Text Snip again
+echo 6. Try Sum Snip on numbers
+echo 7. Document viewer should NOT close when snipping
+echo 8. You should be able to PAGE through PDF (not scroll)
 echo.
-echo ========================================
-echo The add-in should now be FULLY FUNCTIONAL
-echo No more placeholder code - this is real!
-echo ========================================
-pause 
+echo Press any key after testing...
+pause > nul 

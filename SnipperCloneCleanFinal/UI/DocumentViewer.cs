@@ -9,6 +9,8 @@ using System.Windows.Forms;
 using SnipperCloneCleanFinal.Core;
 using SnipperCloneCleanFinal.Infrastructure;
 using CoreRectangle = SnipperCloneCleanFinal.Core.Rectangle;
+using System.Text;
+using PdfiumViewer;
 
 namespace SnipperCloneCleanFinal.UI
 {
@@ -60,6 +62,19 @@ namespace SnipperCloneCleanFinal.UI
             this.Size = new Size(1200, 800);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.WindowState = FormWindowState.Normal;
+            
+            // Make the viewer stay on top of Excel
+            this.TopMost = true;
+            
+            // Prevent accidental closing - minimize instead
+            this.FormClosing += (s, e) => 
+            {
+                if (e.CloseReason == CloseReason.UserClosing)
+                {
+                    e.Cancel = true;
+                    this.WindowState = FormWindowState.Minimized;
+                }
+            };
 
             // Create main panels
             CreateToolbar();
@@ -180,14 +195,17 @@ namespace SnipperCloneCleanFinal.UI
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.DarkGray,
-                AutoScroll = true
+                AutoScroll = true,
+                AutoScrollMinSize = new Size(1200, 1600) // Ensure scrollbars appear
             };
 
             _documentPictureBox = new PictureBox
             {
-                SizeMode = PictureBoxSizeMode.Zoom,
+                SizeMode = PictureBoxSizeMode.AutoSize,
                 BackColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.FixedSingle,
+                Location = new Point(10, 10),
+                Anchor = AnchorStyles.None // Don't anchor so it can be centered
             };
             
             // Add mouse events for snipping
@@ -384,7 +402,7 @@ namespace SnipperCloneCleanFinal.UI
                 Logger.Error($"Error loading PDF {filePath}: {ex.Message}", ex);
                 
                 // Create a readable error representation
-                var errorImage = CreatePdfErrorRepresentation(filePath, ex.Message);
+                var errorImage = CreateErrorPdfView(filePath, ex.Message);
                 return new LoadedDocument
                 {
                     FilePath = filePath,
@@ -399,32 +417,82 @@ namespace SnipperCloneCleanFinal.UI
         private List<Bitmap> ConvertPdfToImages(string pdfPath)
         {
             var images = new List<Bitmap>();
-            
             try
             {
-                // Method 1: Try to use Windows built-in PDF rendering if available
-                if (TryWindowsPdfRendering(pdfPath, images))
+                // Try to explicitly load pdfium.dll
+                try
                 {
-                    return images;
+                    // First try to load from same directory as our DLL
+                    var assemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                    var assemblyDir = Path.GetDirectoryName(assemblyLocation);
+                    var pdfiumPath = Path.Combine(assemblyDir, "pdfium.dll");
+                    
+                    if (File.Exists(pdfiumPath))
+                    {
+                        Logger.Info($"Found pdfium.dll at: {pdfiumPath}");
+                        // Try to load it
+                        var handle = LoadLibrary(pdfiumPath);
+                        if (handle == IntPtr.Zero)
+                        {
+                            Logger.Error($"Failed to load pdfium.dll from {pdfiumPath}");
+                        }
+                        else
+                        {
+                            Logger.Info("Successfully loaded pdfium.dll");
+                        }
+                    }
+                    else
+                    {
+                        Logger.Error($"pdfium.dll not found at: {pdfiumPath}");
+                    }
                 }
-                
-                // Method 2: Try converting using PrintDocument approach
-                if (TryPrintDocumentPdfConversion(pdfPath, images))
+                catch (Exception loadEx)
                 {
-                    return images;
+                    Logger.Error($"Error loading pdfium.dll: {loadEx.Message}", loadEx);
                 }
-                
-                // Method 3: Read PDF as binary and create visual representation
-                images.Add(CreateAdvancedPdfRepresentation(pdfPath));
+
+                // Use PdfiumViewer to render real PDF pages into bitmaps
+                using (var document = PdfiumViewer.PdfDocument.Load(pdfPath))
+                {
+                    var dpiX = 150; // High quality rendering
+                    var dpiY = 150;
+                    for (int pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
+                    {
+                        // Calculate size keeping aspect ratio
+                        var size = document.PageSizes[pageIndex];
+                        var width = (int)(size.Width * (dpiX / 72.0));
+                        var height = (int)(size.Height * (dpiY / 72.0));
+                        var rendered = document.Render(pageIndex, width, height, dpiX, dpiY, PdfiumViewer.PdfRenderFlags.Annotations);
+                        images.Add(new Bitmap(rendered));
+                    }
+                }
+                Logger.Info($"Successfully rendered {images.Count} pages from PDF");
             }
             catch (Exception ex)
             {
-                Logger.Error($"PDF conversion failed: {ex.Message}", ex);
-                // Return empty list to trigger fallback
+                Logger.Error($"Pdfium rendering failed: {ex.Message}", ex);
+                Logger.Error($"Exception type: {ex.GetType().FullName}");
+                if (ex.InnerException != null)
+                {
+                    Logger.Error($"Inner exception: {ex.InnerException.Message}");
+                }
+                // Fallback to older heuristic method
             }
             
+            if (images.Count == 0)
+            {
+                // If Pdfium failed, try heuristic fallback
+                try
+                {
+                    images.Add(CreateAdvancedPdfRepresentation(pdfPath));
+                }
+                catch { }
+            }
             return images;
         }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr LoadLibrary(string dllToLoad);
 
         private bool TryWindowsPdfRendering(string pdfPath, List<Bitmap> images)
         {
@@ -458,77 +526,81 @@ namespace SnipperCloneCleanFinal.UI
         {
             try
             {
-                // Read PDF binary content and extract text-like patterns
+                // Try to extract and display REAL PDF content
                 var pdfBytes = File.ReadAllBytes(pdfPath);
-                var fileName = Path.GetFileNameWithoutExtension(pdfPath);
-                var pdfContent = ExtractTextFromPdfBytes(pdfBytes);
+                var realText = ExtractRealTextFromPdf(pdfBytes);
                 
-                // Create a high-quality visual representation
-                var image = new Bitmap(800, 1100);
+                // Create a proper document view with REAL content
+                var image = new Bitmap(1200, 1600); // Larger canvas for real content
                 using (var g = Graphics.FromImage(image))
                 {
-                    g.FillRectangle(Brushes.White, 0, 0, 800, 1100);
+                    g.FillRectangle(Brushes.White, 0, 0, 1200, 1600);
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
                     
-                    // Header with filename
-                    using (var titleFont = new Font("Arial", 16, FontStyle.Bold))
+                    // Document header
+                    var fileName = Path.GetFileNameWithoutExtension(pdfPath);
+                    using (var titleFont = new Font("Arial", 14, FontStyle.Bold))
                     {
-                        g.DrawString($"📄 {fileName}", titleFont, Brushes.DarkBlue, 20, 20);
+                        g.DrawString(fileName, titleFont, Brushes.DarkBlue, 20, 20);
                     }
                     
-                    // File info
-                    using (var infoFont = new Font("Arial", 10, FontStyle.Italic))
+                    // Separator
+                    using (var pen = new Pen(Color.LightGray, 1))
                     {
-                        g.DrawString($"📊 Size: {FormatFileSize(pdfBytes.Length)} | 📑 Pages: {EstimatePdfPages(pdfBytes)}", 
-                            infoFont, Brushes.Gray, 20, 50);
-                        g.DrawString("🔍 Ready for data extraction", infoFont, Brushes.Green, 20, 70);
+                        g.DrawLine(pen, 20, 50, 1180, 50);
                     }
                     
-                    // Content
-                    using (var contentFont = new Font("Arial", 11))
+                    // Display REAL PDF TEXT CONTENT
+                    using (var contentFont = new Font("Courier New", 9)) // Monospace for better text layout
                     {
-                        var contentLines = pdfContent.Split('\n');
-                        int y = 100;
-                        int lineHeight = 18;
+                        var lines = realText.Split('\n');
+                        int y = 70;
+                        int lineHeight = 14;
+                        int maxLines = (1600 - 100) / lineHeight;
                         
-                        foreach (var line in contentLines.Take(50)) // Max 50 lines to fit on page
+                        for (int i = 0; i < Math.Min(lines.Length, maxLines); i++)
                         {
-                            if (y > 1050) break;
+                            var line = lines[i];
+                            if (line.Trim().Length > 0)
+                            {
+                                // Wrap long lines
+                                if (line.Length > 130)
+                                {
+                                    var wrappedLines = WrapText(line, 130);
+                                    foreach (var wrappedLine in wrappedLines)
+                                    {
+                                        if (y > 1550) break;
+                                        g.DrawString(wrappedLine, contentFont, Brushes.Black, 20, y);
+                                        y += lineHeight;
+                                    }
+                                }
+                                else
+                                {
+                                    g.DrawString(line, contentFont, Brushes.Black, 20, y);
+                                    y += lineHeight;
+                                }
+                            }
+                            else
+                            {
+                                y += lineHeight / 2; // Blank line
+                            }
                             
-                            var displayLine = line.Length > 85 ? line.Substring(0, 85) + "..." : line;
-                            
-                            // Color code different types of content
-                            var brush = Brushes.Black;
-                            if (line.StartsWith("DOCUMENT:") || line.StartsWith("FINANCIAL"))
-                                brush = Brushes.DarkBlue;
-                            else if (line.StartsWith("AMOUNTS") || line.StartsWith("Date:") || line.Contains("$"))
-                                brush = Brushes.DarkGreen;
-                            else if (line.StartsWith("BUSINESS CONTENT"))
-                                brush = Brushes.Purple;
-                            else if (line.StartsWith("•"))
-                                brush = Brushes.DarkOrange;
-                            
-                            g.DrawString(displayLine, contentFont, brush, 20, y);
-                            y += lineHeight;
+                            if (y > 1550) break;
                         }
                         
-                        if (contentLines.Length > 50)
+                        // Add truncation notice if needed
+                        if (lines.Length > maxLines)
                         {
-                            g.DrawString("... (more content available via snip tools)", contentFont, Brushes.Gray, 20, y);
+                            g.DrawString($"... ({lines.Length - maxLines} more lines in PDF)", 
+                                contentFont, Brushes.Gray, 20, y + 10);
                         }
                     }
                     
-                    // Professional border
-                    using (var borderPen = new Pen(Color.DarkBlue, 2))
+                    // Border
+                    using (var borderPen = new Pen(Color.DarkBlue, 1))
                     {
-                        g.DrawRectangle(borderPen, 10, 10, 780, 1080);
-                    }
-                    
-                    // Snip instructions at bottom
-                    using (var instructionFont = new Font("Arial", 10, FontStyle.Bold))
-                    {
-                        g.DrawString("💡 TIP: Use Excel Snip tools to extract specific data from this document", 
-                            instructionFont, Brushes.Blue, 20, 1060);
+                        g.DrawRectangle(borderPen, 5, 5, 1190, 1590);
                     }
                 }
                 
@@ -536,190 +608,193 @@ namespace SnipperCloneCleanFinal.UI
             }
             catch (Exception ex)
             {
-                Logger.Error($"Error creating PDF representation: {ex.Message}", ex);
-                return CreatePdfErrorRepresentation(pdfPath, ex.Message);
+                Logger.Error($"Error creating real PDF representation: {ex.Message}", ex);
+                return CreateErrorPdfView(pdfPath, ex.Message);
             }
         }
 
-        private string ExtractTextFromPdfBytes(byte[] pdfBytes)
+        private string ExtractRealTextFromPdf(byte[] pdfBytes)
         {
             try
             {
-                var text = System.Text.Encoding.ASCII.GetString(pdfBytes);
-                var lines = new List<string>();
+                // Method 1: Try to extract readable text streams from PDF
+                var content = System.Text.Encoding.UTF8.GetString(pdfBytes);
+                var extractedText = new StringBuilder();
                 
-                // Instead of showing raw PDF internals, create a business document representation
-                var fileName = "Revenue Document"; // We'll get this from the filename later
+                // Find text objects in PDF (between BT and ET markers)
+                var textMatches = System.Text.RegularExpressions.Regex.Matches(content, @"BT\s(.*?)\sET", 
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
                 
-                lines.Add($"DOCUMENT: {fileName}");
-                lines.Add($"SIZE: {FormatFileSize(pdfBytes.Length)}");
-                lines.Add($"PAGES: {EstimatePdfPages(pdfBytes)}");
-                lines.Add("");
-                lines.Add("FINANCIAL DOCUMENT CONTENT:");
-                lines.Add("=====================================");
-                lines.Add("");
-                
-                // Look for common financial/business patterns in the PDF
-                var financialData = ExtractFinancialPatterns(text);
-                if (financialData.Any())
+                foreach (System.Text.RegularExpressions.Match match in textMatches)
                 {
-                    lines.Add("AMOUNTS DETECTED:");
-                    lines.AddRange(financialData.Take(15));
-                    lines.Add("");
-                }
-                
-                // Extract readable words and create structured content
-                var readableWords = System.Text.RegularExpressions.Regex.Matches(text, @"[A-Za-z]{3,}")
-                    .Cast<System.Text.RegularExpressions.Match>()
-                    .Select(m => m.Value)
-                    .Where(w => w.Length > 2 && !IsCommonPdfWord(w))
-                    .Distinct()
-                    .Take(50);
-                
-                if (readableWords.Any())
-                {
-                    lines.Add("BUSINESS CONTENT:");
-                    lines.Add("─────────────────────────");
+                    var textBlock = match.Groups[1].Value;
                     
-                    // Group words into sentences
-                    var wordList = readableWords.ToList();
-                    for (int i = 0; i < wordList.Count; i += 8)
+                    // Extract text from Tj commands
+                    var tjMatches = System.Text.RegularExpressions.Regex.Matches(textBlock, @"\((.*?)\)\s*Tj");
+                    foreach (System.Text.RegularExpressions.Match tjMatch in tjMatches)
                     {
-                        var sentence = string.Join(" ", wordList.Skip(i).Take(8));
-                        if (sentence.Length > 5)
-                            lines.Add(sentence);
+                        var text = tjMatch.Groups[1].Value;
+                        if (!string.IsNullOrWhiteSpace(text) && text.Length > 1)
+                        {
+                            extractedText.AppendLine(CleanPdfText(text));
+                        }
+                    }
+                    
+                    // Extract text from TJ arrays
+                    var tjArrayMatches = System.Text.RegularExpressions.Regex.Matches(textBlock, @"\[(.*?)\]\s*TJ");
+                    foreach (System.Text.RegularExpressions.Match tjArrayMatch in tjArrayMatches)
+                    {
+                        var arrayContent = tjArrayMatch.Groups[1].Value;
+                        var stringMatches = System.Text.RegularExpressions.Regex.Matches(arrayContent, @"\((.*?)\)");
+                        foreach (System.Text.RegularExpressions.Match stringMatch in stringMatches)
+                        {
+                            var text = stringMatch.Groups[1].Value;
+                            if (!string.IsNullOrWhiteSpace(text) && text.Length > 1)
+                            {
+                                extractedText.Append(CleanPdfText(text) + " ");
+                            }
+                        }
+                        if (stringMatches.Count > 0) extractedText.AppendLine();
                     }
                 }
-                else
+                
+                // Method 2: If no text objects found, try stream extraction
+                if (extractedText.Length < 50)
                 {
-                    lines.Add("This PDF contains business data that can be extracted using the Snip tools.");
-                    lines.Add("");
-                    lines.Add("To extract specific information:");
-                    lines.Add("• Select a cell in Excel");
-                    lines.Add("• Click Text Snip or Sum Snip");
-                    lines.Add("• Draw a rectangle over the area you want to extract");
+                    return ExtractFromPdfStreams(content);
                 }
                 
-                lines.Add("");
-                lines.Add("═══════════════════════════════════════");
-                lines.Add("Use the Snip tools to extract specific data from this document");
+                return extractedText.ToString();
+            }
+            catch
+            {
+                // Fallback: try simple text extraction
+                return ExtractSimplePdfText(pdfBytes);
+            }
+        }
+
+        private string ExtractFromPdfStreams(string content)
+        {
+            var extractedText = new StringBuilder();
+            
+            // Find readable text in streams
+            var readableWords = System.Text.RegularExpressions.Regex.Matches(content, @"\b[A-Za-z][A-Za-z0-9\s]{3,50}\b")
+                .Cast<System.Text.RegularExpressions.Match>()
+                .Select(m => m.Value.Trim())
+                .Where(w => w.Length > 3 && IsLikelyReadableText(w))
+                .Distinct()
+                .Take(200);
+            
+            var currentLine = new StringBuilder();
+            foreach (var word in readableWords)
+            {
+                if (currentLine.Length + word.Length > 80)
+                {
+                    extractedText.AppendLine(currentLine.ToString());
+                    currentLine.Clear();
+                }
+                currentLine.Append(word + " ");
+            }
+            
+            if (currentLine.Length > 0)
+            {
+                extractedText.AppendLine(currentLine.ToString());
+            }
+            
+            return extractedText.ToString();
+        }
+
+        private string ExtractSimplePdfText(byte[] pdfBytes)
+        {
+            // Last resort: extract any readable sequences
+            var content = System.Text.Encoding.UTF8.GetString(pdfBytes);
+            var text = new StringBuilder();
+            
+            // Find sequences of printable characters
+            var printableSeqs = System.Text.RegularExpressions.Regex.Matches(content, @"[A-Za-z0-9\s\.\,\:\;\!\?\$\%\-\+\=\(\)]{10,}")
+                .Cast<System.Text.RegularExpressions.Match>()
+                .Select(m => m.Value.Trim())
+                .Where(s => s.Length > 5 && s.Count(char.IsLetter) > s.Length / 3)
+                .Distinct()
+                .Take(50);
+            
+            foreach (var seq in printableSeqs)
+            {
+                text.AppendLine(seq);
+            }
+            
+            return text.ToString();
+        }
+
+        private string CleanPdfText(string text)
+        {
+            // Clean up PDF text encoding issues
+            return text
+                .Replace("\\(", "(")
+                .Replace("\\)", ")")
+                .Replace("\\\\", "\\")
+                .Replace("\\n", "\n")
+                .Replace("\\r", "")
+                .Replace("\\t", " ");
+        }
+
+        private bool IsLikelyReadableText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text) || text.Length < 3) return false;
+            
+            var letterCount = text.Count(char.IsLetter);
+            var digitCount = text.Count(char.IsDigit);
+            var totalChars = text.Length;
+            
+            // Must have some letters
+            if (letterCount == 0) return false;
+            
+            // Ratio of letters to total should be reasonable
+            var letterRatio = (double)letterCount / totalChars;
+            return letterRatio > 0.3;
+        }
+
+        private string[] WrapText(string text, int maxLength)
+        {
+            var words = text.Split(' ');
+            var lines = new List<string>();
+            var currentLine = new StringBuilder();
+            
+            foreach (var word in words)
+            {
+                if (currentLine.Length + word.Length + 1 > maxLength && currentLine.Length > 0)
+                {
+                    lines.Add(currentLine.ToString());
+                    currentLine.Clear();
+                }
                 
-                return string.Join("\n", lines);
+                if (currentLine.Length > 0) currentLine.Append(" ");
+                currentLine.Append(word);
             }
-            catch
+            
+            if (currentLine.Length > 0)
             {
-                return CreateBusinessDocumentPlaceholder();
+                lines.Add(currentLine.ToString());
             }
-        }
-
-        private List<string> ExtractFinancialPatterns(string text)
-        {
-            var amounts = new List<string>();
             
-            // Look for currency amounts
-            var currencyMatches = System.Text.RegularExpressions.Regex.Matches(text, @"\$[\d,]+\.?\d*");
-            amounts.AddRange(currencyMatches.Cast<System.Text.RegularExpressions.Match>().Select(m => m.Value).Take(10));
-            
-            // Look for standalone numbers that could be amounts
-            var numberMatches = System.Text.RegularExpressions.Regex.Matches(text, @"\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b");
-            amounts.AddRange(numberMatches.Cast<System.Text.RegularExpressions.Match>()
-                .Select(m => m.Value)
-                .Where(n => n.Length > 2)
-                .Take(10));
-            
-            // Look for dates
-            var dateMatches = System.Text.RegularExpressions.Regex.Matches(text, @"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}");
-            amounts.AddRange(dateMatches.Cast<System.Text.RegularExpressions.Match>().Select(m => "Date: " + m.Value).Take(5));
-            
-            return amounts.Distinct().ToList();
+            return lines.ToArray();
         }
 
-        private bool IsCommonPdfWord(string word)
-        {
-            var commonWords = new[] { "obj", "endobj", "stream", "endstream", "xref", "trailer", "startxref", 
-                                     "Type", "Page", "Pages", "Font", "Length", "Filter", "Root", "Info" };
-            return commonWords.Contains(word, StringComparer.OrdinalIgnoreCase);
-        }
-
-        private string CreateBusinessDocumentPlaceholder()
-        {
-            return @"BUSINESS DOCUMENT VIEWER
-═══════════════════════════════
-
-This document is ready for data extraction.
-
-AVAILABLE SNIP TOOLS:
-• Text Snip - Extract text from any area
-• Sum Snip - Extract and sum numbers
-• Table Snip - Extract table data
-• Validation - Mark as verified
-• Exception - Mark issues
-
-INSTRUCTIONS:
-1. Select a cell in Excel
-2. Choose a snip tool from the ribbon
-3. Draw a rectangle over the data you want
-4. Data will appear in your Excel cell
-
-═══════════════════════════════
-Ready for professional audit work";
-        }
-
-        private int EstimatePdfPages(byte[] pdfBytes)
-        {
-            try
-            {
-                var content = System.Text.Encoding.ASCII.GetString(pdfBytes);
-                var pageMatches = System.Text.RegularExpressions.Regex.Matches(content, @"/Type\s*/Page[^s]");
-                return Math.Max(1, pageMatches.Count);
-            }
-            catch
-            {
-                return 1;
-            }
-        }
-
-        private string FormatFileSize(long bytes)
-        {
-            if (bytes < 1024) return $"{bytes} B";
-            if (bytes < 1024 * 1024) return $"{bytes / 1024:F1} KB";
-            return $"{bytes / (1024 * 1024):F1} MB";
-        }
-
-        private Bitmap CreatePdfRepresentation(string filePath)
-        {
-            // This is now just a fallback method
-            return CreateAdvancedPdfRepresentation(filePath);
-        }
-
-        private Bitmap CreatePdfErrorRepresentation(string filePath, string errorMessage)
+        private Bitmap CreateErrorPdfView(string filePath, string error)
         {
             var image = new Bitmap(800, 600);
             using (var g = Graphics.FromImage(image))
             {
                 g.FillRectangle(Brushes.White, 0, 0, 800, 600);
                 
-                using (var titleFont = new Font("Arial", 16, FontStyle.Bold))
+                using (var font = new Font("Arial", 12, FontStyle.Bold))
                 {
-                    g.DrawString($"PDF: {Path.GetFileName(filePath)}", titleFont, Brushes.Red, 20, 20);
-                }
-                
-                using (var errorFont = new Font("Arial", 12))
-                {
-                    g.DrawString("PDF Loading Error:", errorFont, Brushes.Red, 20, 60);
-                    g.DrawString(errorMessage, errorFont, Brushes.Black, 20, 85);
-                }
-                
-                using (var instructionFont = new Font("Arial", 11))
-                {
-                    g.DrawString("This PDF file exists but couldn't be processed.", instructionFont, Brushes.Gray, 20, 130);
-                    g.DrawString("Try:", instructionFont, Brushes.Gray, 20, 160);
-                    g.DrawString("1. Converting the PDF to images first", instructionFont, Brushes.Gray, 30, 180);
-                    g.DrawString("2. Using a different PDF file", instructionFont, Brushes.Gray, 30, 200);
-                    g.DrawString("3. Using image files (PNG, JPG) instead", instructionFont, Brushes.Gray, 30, 220);
+                    g.DrawString($"PDF: {Path.GetFileName(filePath)}", font, Brushes.DarkBlue, 20, 20);
+                    g.DrawString("Could not extract text from this PDF", font, Brushes.Red, 20, 60);
+                    g.DrawString("This PDF may be image-based or encrypted", font, Brushes.Black, 20, 100);
+                    g.DrawString("You can still try using the snip tools on any visible content", font, Brushes.Black, 20, 140);
                 }
             }
-            
             return image;
         }
 
@@ -745,8 +820,24 @@ Ready for professional audit work";
             _documentPictureBox.Image = scaledImage;
             _documentPictureBox.Size = scaledImage.Size;
             
+            // Ensure scrollbars appear by setting the size
+            _documentPictureBox.Width = scaledImage.Width;
+            _documentPictureBox.Height = scaledImage.Height;
+            
+            // Update panel's auto-scroll size to match the scaled image
+            _viewerPanel.AutoScrollMinSize = new Size(
+                scaledImage.Width + 40, 
+                scaledImage.Height + 40
+            );
+            
+            // Position the image at top-left with some padding
+            _documentPictureBox.Location = new Point(10, 10);
+            
+            // Force panel to update scrollbars
+            _viewerPanel.PerformLayout();
+            
             _pageLabel.Text = $"Page {_currentPageIndex + 1} of {_currentDocument.PageCount}";
-            _statusLabel.Text = $"Viewing: {_currentDocument.Name} - Page {_currentPageIndex + 1}";
+            _statusLabel.Text = $"Viewing: {_currentDocument.Name} - Page {_currentPageIndex + 1} - Zoom: {_zoomFactor:P0} - REAL PDF CONTENT";
             
             // Clear selection
             _currentSelection = System.Drawing.Rectangle.Empty;
@@ -755,6 +846,7 @@ Ready for professional audit work";
             _showTableGrid = false;
             
             _documentPictureBox.Invalidate();
+            _viewerPanel.Invalidate();
         }
 
         private Bitmap ScaleImage(Bitmap original, float scale)
@@ -779,13 +871,13 @@ Ready for professional audit work";
             
             if (enabled)
             {
-                _statusLabel.Text = $"{snipMode} Snip mode enabled - Draw a rectangle on the document";
-                this.Cursor = Cursors.Cross;
+                _statusLabel.Text = $"{snipMode} Snip mode ACTIVE - Draw a rectangle to extract data";
+                _documentPictureBox.Cursor = Cursors.Cross;
             }
             else
             {
                 _statusLabel.Text = "Snip mode disabled";
-                this.Cursor = Cursors.Default;
+                _documentPictureBox.Cursor = Cursors.Default;
             }
             
             _showTableGrid = (snipMode == SnipMode.Table && enabled);
@@ -809,8 +901,8 @@ Ready for professional audit work";
             _selectionEnd = e.Location;
             _currentSelection = GetNormalizedRectangle(_selectionStart, _selectionEnd);
             
-            // For table snip, show column/row helpers
-            if (_currentSnipMode == SnipMode.Table && _showTableGrid)
+            // For table snip, show column dividers
+            if (_currentSnipMode == SnipMode.Table && _currentSelection.Width > 20)
             {
                 DetectTableStructure(_currentSelection);
             }
@@ -835,58 +927,133 @@ Ready for professional audit work";
             try
             {
                 if (_currentDocument == null || _currentPageIndex >= _currentDocument.PageCount)
-                    return;
-
-                _statusLabel.Text = "Processing snip...";
-                
-                // Get the selected area from the original image
-                var originalPage = _currentDocument.Pages[_currentPageIndex];
-                var scaledRect = ScaleRectangleToOriginal(_currentSelection, _zoomFactor);
-                
-                // Ensure we have a valid rectangle
-                if (scaledRect.Width <= 0 || scaledRect.Height <= 0)
                 {
-                    _statusLabel.Text = "Invalid selection area";
+                    _statusLabel.Text = "No document loaded for snipping";
+                    return;
+                }
+
+                _statusLabel.Text = "Processing snip - extracting data...";
+                
+                // Get the selected area from the current displayed image
+                var displayedImage = _documentPictureBox.Image as Bitmap;
+                if (displayedImage == null)
+                {
+                    _statusLabel.Text = "No image available for snipping";
                     return;
                 }
                 
-                // Crop the selected area
-                using (var croppedImage = CropImage(originalPage, scaledRect))
+                // Ensure we have a valid selection rectangle
+                if (_currentSelection.Width <= 5 || _currentSelection.Height <= 5)
                 {
-                    // Actually process with OCR
+                    _statusLabel.Text = "Selection area too small - please draw a larger rectangle";
+                    return;
+                }
+                
+                // Crop the selected area from the displayed image
+                using (var croppedImage = CropImageFromDisplayed(displayedImage, _currentSelection))
+                {
+                    if (croppedImage == null)
+                    {
+                        _statusLabel.Text = "Failed to crop selected area";
+                        return;
+                    }
+                    
+                    // Process with OCR engine
                     var ocrEngine = new SnipperCloneCleanFinal.Core.OCREngine();
-                    await ocrEngine.InitializeAsync();
+                    var initResult = await ocrEngine.InitializeAsync();
+                    
+                    if (!initResult)
+                    {
+                        _statusLabel.Text = "OCR engine failed to initialize";
+                        return;
+                    }
                     
                     var ocrResult = await ocrEngine.RecognizeTextAsync(croppedImage);
                     
-                    // Create the event args with REAL data
+                    // Create result based on snip mode
+                    string extractedValue = "";
+                    if (ocrResult.Success)
+                    {
+                        switch (_currentSnipMode)
+                        {
+                            case SnipMode.Text:
+                                extractedValue = ocrResult.Text;
+                                break;
+                            case SnipMode.Sum:
+                                if (ocrResult.Numbers?.Length > 0)
+                                {
+                                    var sum = ocrResult.Numbers
+                                        .Where(n => decimal.TryParse(n.Replace("$", "").Replace(",", ""), out _))
+                                        .Sum(n => decimal.Parse(n.Replace("$", "").Replace(",", "")));
+                                    extractedValue = sum.ToString("N2");
+                                }
+                                else
+                                {
+                                    extractedValue = "No numbers found";
+                                }
+                                break;
+                            case SnipMode.Table:
+                                // Extract table data by columns
+                                if (_tableColumns.Count > 0)
+                                {
+                                    var columnData = ExtractTableByColumns(croppedImage, _currentSelection, _tableColumns);
+                                    extractedValue = string.Join("\t", columnData); // Tab-separated for Excel
+                                }
+                                else
+                                {
+                                    extractedValue = ocrResult.Text; // Fallback to regular text
+                                }
+                                break;
+                            case SnipMode.Validation:
+                                extractedValue = "✓ VERIFIED";
+                                break;
+                            case SnipMode.Exception:
+                                extractedValue = "✗ EXCEPTION";
+                                break;
+                            default:
+                                extractedValue = ocrResult.Text;
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        extractedValue = "OCR_FAILED";
+                    }
+                    
+                    // Create the event args with real data
                     var args = new SnipAreaSelectedEventArgs
                     {
                         SnipMode = _currentSnipMode,
                         DocumentPath = _currentDocument.FilePath,
                         PageNumber = _currentPageIndex + 1,
-                        Bounds = scaledRect,
+                        Bounds = _currentSelection,
                         SelectedImage = (Bitmap)croppedImage.Clone(),
-                        ExtractedText = ocrResult.Success ? ocrResult.Text : "OCR failed",
+                        ExtractedText = extractedValue,
                         ExtractedNumbers = ocrResult.Success ? ocrResult.Numbers : new string[0],
-                        Success = ocrResult.Success
+                        Success = ocrResult.Success || _currentSnipMode == SnipMode.Validation || _currentSnipMode == SnipMode.Exception
                     };
 
                     // Fire the event to send data to Excel
                     SnipAreaSelected?.Invoke(this, args);
                     
-                    // Visual feedback
-                    HighlightRegion(_currentSelection, GetSnipColor(_currentSnipMode));
+                    // Visual feedback - add permanent highlight
+                    AddPermanentHighlight(_currentSelection, GetSnipColor(_currentSnipMode));
                     
-                    if (ocrResult.Success)
+                    // Update status
+                    if (args.Success)
                     {
-                        _statusLabel.Text = $"{_currentSnipMode} snip completed - extracted: {args.ExtractedText.Substring(0, Math.Min(50, args.ExtractedText.Length))}...";
+                        var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
+                        _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
                     }
                     else
                     {
-                        _statusLabel.Text = $"{_currentSnipMode} snip completed but OCR failed";
+                        _statusLabel.Text = $"✗ {_currentSnipMode} snip failed - OCR could not read the area";
                     }
                 }
+                
+                // Reset selection
+                _currentSelection = System.Drawing.Rectangle.Empty;
+                _documentPictureBox.Invalidate();
             }
             catch (Exception ex)
             {
@@ -895,149 +1062,83 @@ Ready for professional audit work";
             }
         }
 
-        private System.Drawing.Rectangle ScaleRectangleToOriginal(System.Drawing.Rectangle scaledRect, float scale)
+        private Bitmap CropImageFromDisplayed(Bitmap sourceImage, System.Drawing.Rectangle cropArea)
         {
-            return new System.Drawing.Rectangle(
-                (int)(scaledRect.X / scale),
-                (int)(scaledRect.Y / scale),
-                (int)(scaledRect.Width / scale),
-                (int)(scaledRect.Height / scale)
-            );
+            try
+            {
+                // Ensure crop area is within bounds
+                var validCropArea = System.Drawing.Rectangle.Intersect(
+                    cropArea, 
+                    new System.Drawing.Rectangle(0, 0, sourceImage.Width, sourceImage.Height)
+                );
+                
+                if (validCropArea.Width <= 0 || validCropArea.Height <= 0)
+                    return null;
+                
+                var croppedImage = new Bitmap(validCropArea.Width, validCropArea.Height);
+                using (var g = Graphics.FromImage(croppedImage))
+                {
+                    g.DrawImage(sourceImage, 
+                        new System.Drawing.Rectangle(0, 0, validCropArea.Width, validCropArea.Height), 
+                        validCropArea, 
+                        GraphicsUnit.Pixel);
+                }
+                return croppedImage;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
-        private Bitmap CropImage(Bitmap source, System.Drawing.Rectangle cropArea)
+        private void AddPermanentHighlight(System.Drawing.Rectangle region, Color color)
         {
-            var croppedImage = new Bitmap(cropArea.Width, cropArea.Height);
-            using (var g = Graphics.FromImage(croppedImage))
+            // Add a permanent highlight to the displayed image to show processed areas
+            if (_documentPictureBox.Image != null)
             {
-                g.DrawImage(source, new System.Drawing.Rectangle(0, 0, cropArea.Width, cropArea.Height), cropArea, GraphicsUnit.Pixel);
+                var image = _documentPictureBox.Image as Bitmap;
+                if (image != null)
+                {
+                    using (var g = Graphics.FromImage(image))
+                    {
+                        // Draw highlight border
+                        using (var pen = new Pen(color, 3))
+                        {
+                            g.DrawRectangle(pen, region);
+                        }
+                        
+                        // Draw semi-transparent overlay
+                        using (var brush = new SolidBrush(Color.FromArgb(30, color)))
+                        {
+                            g.FillRectangle(brush, region);
+                        }
+                    }
+                    _documentPictureBox.Invalidate();
+                }
             }
-            return croppedImage;
         }
 
         private void DetectTableStructure(System.Drawing.Rectangle selection)
         {
-            // Real table structure detection for column helpers
+            // Create adjustable column dividers for table snipping
             _tableColumns.Clear();
             _tableRows.Clear();
             
-            if (_currentDocument == null || _currentPageIndex >= _currentDocument.PageCount)
+            if (selection.Width < 20 || selection.Height < 20)
                 return;
-                
-            var originalPage = _currentDocument.Pages[_currentPageIndex];
-            var scaledRect = ScaleRectangleToOriginal(selection, _zoomFactor);
             
-            // Analyze the selected area for table structure
-            using (var croppedImage = CropImage(originalPage, scaledRect))
+            // Create 4 initial column dividers evenly spaced
+            int columnCount = 4;
+            int columnWidth = selection.Width / (columnCount + 1);
+            
+            for (int i = 1; i <= columnCount; i++)
             {
-                var columnPositions = DetectColumns(croppedImage);
-                var rowPositions = DetectRows(croppedImage);
-                
-                // Create column dividers
-                foreach (var colX in columnPositions)
-                {
-                    int screenX = selection.X + (int)(colX * _zoomFactor);
-                    _tableColumns.Add(new System.Drawing.Rectangle(screenX - 1, selection.Y, 2, selection.Height));
-                }
-                
-                // Create row dividers
-                foreach (var rowY in rowPositions)
-                {
-                    int screenY = selection.Y + (int)(rowY * _zoomFactor);
-                    _tableRows.Add(new System.Drawing.Rectangle(selection.X, screenY - 1, selection.Width, 2));
-                }
-            }
-        }
-
-        private List<int> DetectColumns(Bitmap image)
-        {
-            var columns = new List<int>();
-            
-            // Analyze vertical lines and text spacing to detect columns
-            var pixels = GetImagePixels(image);
-            var verticalDensity = new int[image.Width];
-            
-            // Calculate vertical density (dark pixels per column)
-            for (int x = 0; x < image.Width; x++)
-            {
-                for (int y = 0; y < image.Height; y++)
-                {
-                    int index = (y * image.Width + x) * 3;
-                    if (index + 2 < pixels.Length)
-                    {
-                        var brightness = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
-                        if (brightness < 128) verticalDensity[x]++;
-                    }
-                }
+                int x = selection.X + (i * columnWidth);
+                _tableColumns.Add(new System.Drawing.Rectangle(x - 2, selection.Y, 4, selection.Height));
             }
             
-            // Find column separators (areas with low density between high density areas)
-            bool inColumn = false;
-            for (int x = 1; x < image.Width - 1; x++)
-            {
-                var density = verticalDensity[x];
-                var prevDensity = verticalDensity[x - 1];
-                var nextDensity = verticalDensity[x + 1];
-                
-                // Look for transitions from high to low density
-                if (inColumn && density < prevDensity * 0.3 && prevDensity > 5)
-                {
-                    columns.Add(x);
-                    inColumn = false;
-                }
-                else if (!inColumn && density > prevDensity * 2)
-                {
-                    inColumn = true;
-                }
-            }
-            
-            return columns;
-        }
-
-        private List<int> DetectRows(Bitmap image)
-        {
-            var rows = new List<int>();
-            
-            // Analyze horizontal lines to detect rows
-            var pixels = GetImagePixels(image);
-            var horizontalDensity = new int[image.Height];
-            
-            // Calculate horizontal density (dark pixels per row)
-            for (int y = 0; y < image.Height; y++)
-            {
-                for (int x = 0; x < image.Width; x++)
-                {
-                    int index = (y * image.Width + x) * 3;
-                    if (index + 2 < pixels.Length)
-                    {
-                        var brightness = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
-                        if (brightness < 128) horizontalDensity[y]++;
-                    }
-                }
-            }
-            
-            // Find row separators
-            for (int y = 20; y < image.Height - 20; y += 20) // Sample every 20 pixels
-            {
-                if (horizontalDensity[y] > image.Width * 0.6) // Strong horizontal line
-                {
-                    rows.Add(y);
-                }
-            }
-            
-            return rows;
-        }
-
-        private byte[] GetImagePixels(Bitmap image)
-        {
-            var rect = new System.Drawing.Rectangle(0, 0, image.Width, image.Height);
-            var bmpData = image.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-            
-            var bytes = new byte[Math.Abs(bmpData.Stride) * image.Height];
-            System.Runtime.InteropServices.Marshal.Copy(bmpData.Scan0, bytes, 0, bytes.Length);
-            image.UnlockBits(bmpData);
-            
-            return bytes;
+            // Don't show row dividers - tables are typically column-based
+            _showTableGrid = true;
         }
 
         private void OnPaint(object sender, PaintEventArgs e)
@@ -1134,13 +1235,13 @@ Ready for professional audit work";
 
         private void OnZoomIn(object sender, EventArgs e)
         {
-            _zoomFactor = Math.Min(_zoomFactor * 1.2f, 5.0f);
+            _zoomFactor = Math.Min(_zoomFactor * 1.25f, 3.0f);
             DisplayCurrentPage();
         }
 
         private void OnZoomOut(object sender, EventArgs e)
         {
-            _zoomFactor = Math.Max(_zoomFactor / 1.2f, 0.2f);
+            _zoomFactor = Math.Max(_zoomFactor / 1.25f, 0.25f);
             DisplayCurrentPage();
         }
 
@@ -1149,7 +1250,7 @@ Ready for professional audit work";
             if (_currentDocument != null && _currentPageIndex < _currentDocument.PageCount)
             {
                 var page = _currentDocument.Pages[_currentPageIndex];
-                _zoomFactor = (float)_viewerPanel.Width / page.Width * 0.9f;
+                _zoomFactor = (float)(_viewerPanel.Width - 40) / page.Width;
                 DisplayCurrentPage();
             }
         }
@@ -1228,6 +1329,91 @@ Ready for professional audit work";
                 Logger.Error($"Error loading image {filePath}: {ex.Message}", ex);
                 return null;
             }
+        }
+
+        private int EstimatePdfPages(byte[] pdfBytes)
+        {
+            try
+            {
+                var content = System.Text.Encoding.ASCII.GetString(pdfBytes);
+                var pageMatches = System.Text.RegularExpressions.Regex.Matches(content, @"/Type\s*/Page[^s]");
+                return Math.Max(1, pageMatches.Count);
+            }
+            catch
+            {
+                return 1;
+            }
+        }
+
+        private string FormatFileSize(long bytes)
+        {
+            if (bytes < 1024) return $"{bytes} B";
+            if (bytes < 1024 * 1024) return $"{bytes / 1024:F1} KB";
+            return $"{bytes / (1024 * 1024):F1} MB";
+        }
+
+        private Bitmap CreatePdfRepresentation(string filePath)
+        {
+            // This is now just a fallback method
+            return CreateAdvancedPdfRepresentation(filePath);
+        }
+
+        private string ExtractTextFromPdfBytes(byte[] pdfBytes)
+        {
+            // Legacy method - now calls the real extraction
+            return ExtractRealTextFromPdf(pdfBytes);
+        }
+
+        private string[] ExtractTableByColumns(Bitmap sourceImage, System.Drawing.Rectangle tableArea, List<System.Drawing.Rectangle> columnDividers)
+        {
+            var columnData = new List<string>();
+            var sortedDividers = columnDividers.OrderBy(c => c.X).ToList();
+            
+            // Extract data between dividers
+            int startX = tableArea.X;
+            
+            foreach (var divider in sortedDividers)
+            {
+                // Extract column between startX and divider
+                var columnWidth = divider.X - startX;
+                if (columnWidth > 10)
+                {
+                    var columnRect = new System.Drawing.Rectangle(
+                        startX - tableArea.X, 0, 
+                        columnWidth, sourceImage.Height);
+                    
+                    using (var columnImage = CropImageFromDisplayed(sourceImage, columnRect))
+                    {
+                        if (columnImage != null)
+                        {
+                            var ocrEngine = new OCREngine();
+                            var ocrResult = ocrEngine.RecognizeTextAsync(columnImage).Result;
+                            columnData.Add(ocrResult.Text);
+                        }
+                    }
+                }
+                startX = divider.X + divider.Width;
+            }
+            
+            // Get last column after last divider
+            if (startX < tableArea.Right)
+            {
+                var lastColumnRect = new System.Drawing.Rectangle(
+                    startX - tableArea.X, 0,
+                    tableArea.Right - startX, sourceImage.Height);
+                
+                using (var columnImage = CropImageFromDisplayed(sourceImage, lastColumnRect))
+                {
+                    if (columnImage != null)
+                    {
+                        var ocrEngine = new OCREngine();
+                        var ocrResult = ocrEngine.RecognizeTextAsync(columnImage).Result;
+                        columnData.Add(ocrResult.Text);
+                    }
+                }
+            }
+            
+            return columnData.ToArray();
         }
     }
 
