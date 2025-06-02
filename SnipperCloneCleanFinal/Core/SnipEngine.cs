@@ -44,7 +44,7 @@ namespace SnipperCloneCleanFinal.Core
             CellSelectionChanged?.Invoke(this, new CellSelectionChangedEventArgs(oldAddress, cellAddress));
         }
 
-        public async Task<SnipResult> ProcessSnipAsync(Bitmap imageData, int pageNumber, Rectangle rectangle)
+        public async Task<SnipResult> ProcessSnipAsync(Bitmap imageData, int pageNumber, System.Drawing.Rectangle rectangle)
         {
             try
             {

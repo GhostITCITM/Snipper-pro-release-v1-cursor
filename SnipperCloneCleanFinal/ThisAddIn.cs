@@ -26,7 +26,7 @@ namespace SnipperCloneCleanFinal
         private Excel.Application _application;
         private static readonly object _lockObject = new object();
         private SnipEngine _snippEngine;
-        private DocumentViewerPane _documentViewer;
+        private DocumentViewer _documentViewer;
         private SnipMode _currentSnipMode = SnipMode.Text;
 
         public Excel.Application Application => _application;
@@ -196,14 +196,15 @@ namespace SnipperCloneCleanFinal
             });
         }
 
-        public void OnOpenViewer(IRibbonControl control)
+        public async void OnOpenViewer(IRibbonControl control)
         {
-            ExecuteCallback("OnOpenViewer", () =>
+            ExecuteCallback("OnOpenViewer", async () =>
             {
                 using (var openFileDialog = new OpenFileDialog())
                 {
-                    openFileDialog.Filter = "Image files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff)|*.png;*.jpg;*.jpeg;*.bmp;*.tiff|PDF files (*.pdf)|*.pdf|All files (*.*)|*.*";
-                    openFileDialog.Title = "Select Document to View";
+                    openFileDialog.Filter = "PDF files (*.pdf)|*.pdf|Image files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif|All supported files|*.pdf;*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif|All files (*.*)|*.*";
+                    openFileDialog.Title = "Select Document(s) to Load - PDFs and Images Supported";
+                    openFileDialog.Multiselect = true;
                     
                     if (openFileDialog.ShowDialog() == DialogResult.OK)
                     {
@@ -212,16 +213,21 @@ namespace SnipperCloneCleanFinal
                             InitializeDocumentViewer();
                         }
                         
-                        if (_documentViewer.LoadDocument(openFileDialog.FileName))
+                        // Load all selected files
+                        _documentViewer.Show();
+                        _documentViewer.BringToFront();
+                        
+                        // Call LoadDocuments properly with await
+                        try
                         {
-                            _documentViewer.Show();
-                            _documentViewer.BringToFront();
-                            Logger.Info($"Document loaded: {openFileDialog.FileName}");
+                            await _documentViewer.LoadDocuments(openFileDialog.FileNames);
+                            Logger.Info($"Loaded {openFileDialog.FileNames.Length} document(s)");
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            MessageBox.Show("Failed to load document. Please try an image file (PNG, JPG, BMP, TIFF).", 
-                                "Snipper Pro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            Logger.Error($"Error loading documents: {ex.Message}", ex);
+                            MessageBox.Show($"Error loading documents: {ex.Message}", 
+                                "Snipper Pro Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
                     }
                 }
@@ -262,6 +268,21 @@ namespace SnipperCloneCleanFinal
             }
         }
 
+        private async void ExecuteCallback(string callbackName, System.Func<System.Threading.Tasks.Task> asyncAction)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Snipper Pro: Executing {callbackName}");
+                await asyncAction();
+                System.Diagnostics.Debug.WriteLine($"Snipper Pro: {callbackName} completed successfully");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Snipper Pro {callbackName} Error: {ex.Message}");
+                MessageBox.Show($"Error in {callbackName}: {ex.Message}", "Snipper Pro Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void SetSnipMode(SnipMode snipMode)
         {
             _currentSnipMode = snipMode;
@@ -284,9 +305,9 @@ namespace SnipperCloneCleanFinal
         {
             try
             {
-                _documentViewer = DocumentViewerManager.GetOrCreateViewer();
+                _documentViewer = new DocumentViewer(_snippEngine);
                 _documentViewer.SnipAreaSelected += OnSnipAreaSelected;
-                Logger.Info("Document viewer initialized");
+                Logger.Info("Document viewer initialized with full PDF support");
             }
             catch (Exception ex)
             {
@@ -312,63 +333,111 @@ namespace SnipperCloneCleanFinal
                 string formula = "";
                 string displayValue = "";
                 
+                // Use the extracted data from the event args
                 switch (e.SnipMode)
                 {
                     case SnipMode.Text:
-                        var textResult = await _snippEngine.ProcessSnipAsync(e.SelectedImage, e.PageNumber, 
-                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
-                        
-                        if (textResult.Success)
+                        if (e.Success && !string.IsNullOrEmpty(e.ExtractedText))
                         {
                             formula = DataSnipperFormulas.CreateTextFormula(e.DocumentPath, e.PageNumber, 
-                                textResult.Value, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
-                            displayValue = textResult.Value;
+                                e.ExtractedText, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                            displayValue = e.ExtractedText;
+                        }
+                        else
+                        {
+                            displayValue = "OCR failed";
                         }
                         break;
                         
                     case SnipMode.Sum:
-                        var sumResult = await _snippEngine.ProcessSnipAsync(e.SelectedImage, e.PageNumber, 
-                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
-                        
-                        if (sumResult.Success && double.TryParse(sumResult.Value, out double sumValue))
+                        if (e.Success && e.ExtractedNumbers != null && e.ExtractedNumbers.Length > 0)
                         {
-                            formula = DataSnipperFormulas.CreateSumFormula(e.DocumentPath, e.PageNumber, 
-                                sumValue, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), new List<double> { sumValue });
-                            displayValue = sumValue.ToString();
+                            var numbers = new List<double>();
+                            double sum = 0;
+                            
+                            foreach (var numStr in e.ExtractedNumbers)
+                            {
+                                if (double.TryParse(numStr.Replace(",", "").Replace("$", ""), out double num))
+                                {
+                                    numbers.Add(num);
+                                    sum += num;
+                                }
+                            }
+                            
+                            if (numbers.Count > 0)
+                            {
+                                formula = DataSnipperFormulas.CreateSumFormula(e.DocumentPath, e.PageNumber, 
+                                    sum, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), numbers);
+                                displayValue = sum.ToString("F2");
+                            }
+                            else
+                            {
+                                displayValue = "No numbers found";
+                            }
+                        }
+                        else
+                        {
+                            displayValue = "No numbers extracted";
+                        }
+                        break;
+                        
+                    case SnipMode.Table:
+                        if (e.Success && !string.IsNullOrEmpty(e.ExtractedText))
+                        {
+                            // For table snips, display the extracted text
+                            displayValue = e.ExtractedText;
+                            formula = DataSnipperFormulas.CreateTextFormula(e.DocumentPath, e.PageNumber, 
+                                e.ExtractedText, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                        }
+                        else
+                        {
+                            displayValue = "Table extraction failed";
                         }
                         break;
                         
                     case SnipMode.Validation:
-                        formula = DataSnipperFormulas.CreateValidationFormula(e.DocumentPath, e.PageNumber, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                        formula = DataSnipperFormulas.CreateValidationFormula(e.DocumentPath, e.PageNumber, 
+                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
                         displayValue = "✓";
                         break;
                         
                     case SnipMode.Exception:
-                        formula = DataSnipperFormulas.CreateExceptionFormula(e.DocumentPath, e.PageNumber, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                        formula = DataSnipperFormulas.CreateExceptionFormula(e.DocumentPath, e.PageNumber, 
+                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
                         displayValue = "✗";
                         break;
                 }
                 
-                // Insert the formula into Excel
-                if (!string.IsNullOrEmpty(formula))
+                // Insert the formula and value into Excel
+                if (!string.IsNullOrEmpty(displayValue))
                 {
-                    activeCell.Formula = formula;
+                    // Set the value first
+                    activeCell.Value = displayValue;
                     
-                    // For validation and exception, just show the symbol
-                    if (e.SnipMode == SnipMode.Validation || e.SnipMode == SnipMode.Exception)
+                    // Set the formula if we have one (contains reference to source)
+                    if (!string.IsNullOrEmpty(formula))
                     {
-                        activeCell.Value = displayValue;
+                        activeCell.Formula = formula;
                     }
                     
                     // Add visual indicator (border color)
                     var color = GetSnipColorCode(e.SnipMode);
                     activeCell.Borders.Color = color;
                     
-                    Logger.Info($"{e.SnipMode} snip completed successfully");
+                    Logger.Info($"{e.SnipMode} snip completed successfully - Value: {displayValue}");
+                    
+                    // Show success message
+                    MessageBox.Show($"{e.SnipMode} Snip Complete!\nExtracted: {displayValue}", 
+                        "Snipper Pro", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"{e.SnipMode} snip failed - no data extracted", 
+                        "Snipper Pro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 
-                // Highlight the region in the document viewer
-                _documentViewer.HighlightRegion(new System.Drawing.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), GetSnipColor(e.SnipMode));
+                // Highlight the region in the document viewer  
+                _documentViewer.HighlightRegion(e.Bounds, GetSnipColor(e.SnipMode));
                 
                 // Reset snip mode
                 _documentViewer.SetSnipMode(e.SnipMode, false);

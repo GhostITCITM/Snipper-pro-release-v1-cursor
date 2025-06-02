@@ -432,5 +432,8 @@ namespace SnipperCloneCleanFinal.UI
         public string DocumentPath { get; set; }
         public int PageNumber { get; set; }
         public Bitmap SelectedImage { get; set; }
+        public string ExtractedText { get; set; } = "";
+        public string[] ExtractedNumbers { get; set; } = new string[0];
+        public bool Success { get; set; } = true;
     }
 } 
