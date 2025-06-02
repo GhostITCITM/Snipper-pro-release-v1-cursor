@@ -1,0 +1,140 @@
+Attribute VB_Name = "SnipperPro"
+
+Sub Auto_Open()
+    CreateSnipperProMenu
+End Sub
+
+Sub Auto_Close()
+    DeleteSnipperProMenu
+End Sub
+
+Sub CreateSnipperProMenu()
+    On Error Resume Next
+    
+    ' Delete existing menu if it exists
+    DeleteSnipperProMenu
+    
+    ' Create new menu
+    Dim newMenu As CommandBarPopup
+    Set newMenu = Application.CommandBars("Worksheet Menu Bar").Controls.Add(Type:=msoControlPopup, Before:=9)
+    newMenu.Caption = "&Snipper Pro"
+    
+    ' Add menu items
+    With newMenu
+        With .Controls.Add(Type:=msoControlButton)
+            .Caption = "Text Snip"
+            .OnAction = "TextSnip"
+            .FaceId = 162
+        End With
+        
+        With .Controls.Add(Type:=msoControlButton)
+            .Caption = "Sum Snip"
+            .OnAction = "SumSnip"
+            .FaceId = 226
+        End With
+        
+        .Controls.Add Type:=msoControlSeparator
+        
+        With .Controls.Add(Type:=msoControlButton)
+            .Caption = "Mark Valid ✓"
+            .OnAction = "MarkValid"
+            .FaceId = 463
+        End With
+        
+        With .Controls.Add(Type:=msoControlButton)
+            .Caption = "Mark Exception ✗"
+            .OnAction = "MarkException"
+            .FaceId = 464
+        End With
+        
+        .Controls.Add Type:=msoControlSeparator
+        
+        With .Controls.Add(Type:=msoControlButton)
+            .Caption = "Document Viewer"
+            .OnAction = "DocumentViewer"
+            .FaceId = 23
+        End With
+    End With
+End Sub
+
+Sub DeleteSnipperProMenu()
+    On Error Resume Next
+    Application.CommandBars("Worksheet Menu Bar").Controls("&Snipper Pro").Delete
+End Sub
+
+Sub TextSnip()
+    Dim selectedText As String
+    If TypeName(Selection) = "Range" Then
+        selectedText = Selection.Text
+        MsgBox "Text extracted from " & Selection.Address & vbCrLf & vbCrLf & selectedText, vbInformation, "Snipper Pro - Text Snip"
+    Else
+        MsgBox "Please select a range to extract text from.", vbExclamation, "Snipper Pro"
+    End If
+End Sub
+
+Sub SumSnip()
+    If TypeName(Selection) = "Range" Then
+        If Selection.Count > 1 Then
+            Dim total As Double
+            Dim cell As Range
+            Dim numCount As Long
+            
+            total = 0
+            numCount = 0
+            
+            For Each cell In Selection
+                If IsNumeric(cell.Value) And cell.Value <> "" Then
+                    total = total + CDbl(cell.Value)
+                    numCount = numCount + 1
+                End If
+            Next cell
+            
+            If numCount > 0 Then
+                MsgBox "Sum of " & numCount & " numbers in " & Selection.Address & vbCrLf & vbCrLf & "Total: " & Format(total, "#,##0.00"), vbInformation, "Snipper Pro - Sum Snip"
+            Else
+                MsgBox "No numbers found in the selected range.", vbExclamation, "Snipper Pro"
+            End If
+        Else
+            MsgBox "Please select multiple cells to sum.", vbExclamation, "Snipper Pro"
+        End If
+    Else
+        MsgBox "Please select a range to sum.", vbExclamation, "Snipper Pro"
+    End If
+End Sub
+
+Sub MarkValid()
+    If Not ActiveCell Is Nothing Then
+        With ActiveCell
+            .Value = "✓"
+            .Font.Name = "Segoe UI Symbol"
+            .Font.Size = 16
+            .Font.Color = RGB(0, 128, 0)
+            .Font.Bold = True
+            .HorizontalAlignment = xlCenter
+        End With
+        MsgBox "Cell marked as valid", vbInformation, "Snipper Pro"
+    End If
+End Sub
+
+Sub MarkException()
+    If Not ActiveCell Is Nothing Then
+        With ActiveCell
+            .Value = "✗"
+            .Font.Name = "Segoe UI Symbol"
+            .Font.Size = 16
+            .Font.Color = RGB(255, 0, 0)
+            .Font.Bold = True
+            .HorizontalAlignment = xlCenter
+        End With
+        MsgBox "Cell marked as exception", vbInformation, "Snipper Pro"
+    End If
+End Sub
+
+Sub DocumentViewer()
+    Dim fileName As Variant
+    fileName = Application.GetOpenFilename("All Files (*.*), *.*", , "Select Document to View")
+    
+    If fileName <> False Then
+        MsgBox "Document selected: " & fileName & vbCrLf & vbCrLf & "Document viewer functionality would open here.", vbInformation, "Snipper Pro - Document Viewer"
+    End If
+End Sub 

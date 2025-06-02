@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using Newtonsoft.Json;
 
 namespace SnipperCloneCleanFinal.Infrastructure
 {
@@ -23,9 +22,16 @@ namespace SnipperCloneCleanFinal.Infrastructure
                 if (File.Exists(ConfigPath))
                 {
                     var json = File.ReadAllText(ConfigPath);
-                    dynamic cfg = JsonConvert.DeserializeObject(json);
-                    EnableOcrOnOpen = cfg.EnableOcrOnOpen ?? true;
-                    OcrTimeoutSeconds = cfg.OcrTimeoutSeconds ?? 30;
+                    // Simple JSON parsing without external dependencies
+                    if (json.Contains("\"EnableOcrOnOpen\":false"))
+                        EnableOcrOnOpen = false;
+                    if (json.Contains("\"OcrTimeoutSeconds\":"))
+                    {
+                        var start = json.IndexOf("\"OcrTimeoutSeconds\":") + 20;
+                        var end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                        if (end > start && int.TryParse(json.Substring(start, end - start).Trim(), out int timeout))
+                            OcrTimeoutSeconds = timeout;
+                    }
                 }
             }
             catch (Exception ex)
@@ -44,7 +50,8 @@ namespace SnipperCloneCleanFinal.Infrastructure
                     Directory.CreateDirectory(directory);
                 }
 
-                File.WriteAllText(ConfigPath, JsonConvert.SerializeObject(new { EnableOcrOnOpen, OcrTimeoutSeconds }));
+                var json = $"{{\"EnableOcrOnOpen\":{EnableOcrOnOpen.ToString().ToLower()},\"OcrTimeoutSeconds\":{OcrTimeoutSeconds}}}";
+                File.WriteAllText(ConfigPath, json);
             }
             catch (Exception ex)
             {

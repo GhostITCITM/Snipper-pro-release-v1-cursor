@@ -2,18 +2,18 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyTitle("SnipperCloneCleanFinal")]
-[assembly: AssemblyDescription("DataSnipper Clone - Document Analysis Excel Add-in")]
+[assembly: AssemblyTitle("Snipper Pro")]
+[assembly: AssemblyDescription("Excel Add-in for Document Analysis")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("Internal Team")]
+[assembly: AssemblyCompany("Snipper Pro")]
 [assembly: AssemblyProduct("Snipper Pro")]
-[assembly: AssemblyCopyright("Copyright © Internal Team 2024")]
+[assembly: AssemblyCopyright("Copyright © 2024")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
 [assembly: ComVisible(true)]
 
-[assembly: Guid("12345678-1234-1234-1234-123456789012")]
+[assembly: Guid("D9A6E8B7-F3E1-47B0-B76B-C8DE050D1111")]
 
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")] 
