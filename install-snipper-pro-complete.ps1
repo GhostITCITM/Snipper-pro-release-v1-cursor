@@ -105,6 +105,14 @@ try {
         Write-Host "⚠ WARNING: pdfium.dll not found - PDF rendering will not work!" -ForegroundColor Red
     }
 
+    # Copy tessdata folder for OCR
+    $tessSource = Join-Path $PSScriptRoot "SnipperCloneCleanFinal\tessdata"
+    $tessDest = Join-Path $programFilesDir "tessdata"
+    if (Test-Path $tessSource) {
+        Copy-Item -Path $tessSource -Destination $tessDest -Recurse -Force
+        Write-Host "✓ Copied tessdata folder" -ForegroundColor Green
+    }
+
     # Update DLL path to Program Files location
     $installDllPath = Join-Path $programFilesDir "SnipperCloneCleanFinal.dll"
 
