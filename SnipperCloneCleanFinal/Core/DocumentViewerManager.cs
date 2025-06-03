@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using PdfiumViewer;
 using SnipperCloneCleanFinal.UI;
 using SnipperCloneCleanFinal.Infrastructure;
 
@@ -191,17 +192,28 @@ namespace SnipperCloneCleanFinal.UI
             {
                 _currentDocumentPath = filePath;
                 _documentPages.Clear();
-                
-                // For now, handle image files - PDF support would need additional library
+
+                var ext = System.IO.Path.GetExtension(filePath).ToLower();
                 if (IsImageFile(filePath))
                 {
                     var image = new Bitmap(filePath);
                     _documentPages.Add(image);
                     _totalPages = 1;
                 }
+                else if (ext == ".pdf")
+                {
+                    var pages = RenderPdfToBitmaps(filePath);
+                    if (pages.Count == 0)
+                    {
+                        _statusLabel.Text = "Failed to load PDF";
+                        return false;
+                    }
+                    _documentPages.AddRange(pages);
+                    _totalPages = pages.Count;
+                }
                 else
                 {
-                    _statusLabel.Text = "PDF support coming soon - please use image files for now";
+                    _statusLabel.Text = "Unsupported file type";
                     return false;
                 }
                 
@@ -291,6 +303,32 @@ namespace SnipperCloneCleanFinal.UI
                 _zoomLevel = (float)_documentPanel.Width / image.Width;
                 UpdateDisplay();
             }
+        }
+
+        private List<Bitmap> RenderPdfToBitmaps(string pdfPath)
+        {
+            var images = new List<Bitmap>();
+            try
+            {
+                using (var document = PdfDocument.Load(pdfPath))
+                {
+                    var dpiX = 150;
+                    var dpiY = 150;
+                    for (int i = 0; i < document.PageCount; i++)
+                    {
+                        var size = document.PageSizes[i];
+                        var width = (int)(size.Width * (dpiX / 72.0));
+                        var height = (int)(size.Height * (dpiY / 72.0));
+                        var rendered = document.Render(i, width, height, dpiX, dpiY, PdfRenderFlags.Annotations);
+                        images.Add(new Bitmap(rendered));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to render PDF {pdfPath}: {ex.Message}", ex);
+            }
+            return images;
         }
         
         private void UpdateDisplay()
