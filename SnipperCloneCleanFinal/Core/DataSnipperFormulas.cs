@@ -42,9 +42,27 @@ namespace SnipperCloneCleanFinal.Core
                 Created = DateTime.Now,
                 Numbers = numbers
             };
-            
+
             _snipDatabase[snipId] = snipData;
             return $"=DS.SUMS(\"{snipId}\")";
+        }
+
+        public static string CreateTableFormula(string documentPath, int pageNumber, TableData table, Rectangle bounds)
+        {
+            var snipId = Guid.NewGuid().ToString();
+            var snipData = new SnipData
+            {
+                Id = snipId,
+                Type = SnipMode.Table,
+                DocumentPath = documentPath,
+                PageNumber = pageNumber,
+                Bounds = bounds,
+                Created = DateTime.Now,
+                Table = table
+            };
+
+            _snipDatabase[snipId] = snipData;
+            return $"=DS.TABLE(\"{snipId}\")";
         }
         
         public static string CreateValidationFormula(string documentPath, int pageNumber, Rectangle bounds)
@@ -136,5 +154,6 @@ namespace SnipperCloneCleanFinal.Core
         public DateTime Created { get; set; }
         public List<double> Numbers { get; set; } = new List<double>();
         public string ExceptionReason { get; set; }
+        public TableData Table { get; set; }
     }
-} 
+}

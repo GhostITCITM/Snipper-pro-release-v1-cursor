@@ -40,13 +40,23 @@ namespace SnipperCloneCleanFinal
                 {
                     _application = (Excel.Application)application;
 
+                    var user = Environment.GetEnvironmentVariable("SNIPPER_USER") ?? Environment.UserName;
+                    var pass = Environment.GetEnvironmentVariable("SNIPPER_PASS") ?? "snipper";
+                    if (!AuthManager.Authenticate(user, pass))
+                    {
+                        MessageBox.Show("Authentication failed", "Snipper Pro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+
                     // Link DS formulas to UDF methods
                     Application.Names.Add("DS.TEXTS", "=SnipperPro.Connect.TEXTS");
                     Application.Names.Add("DS.SUMS", "=SnipperPro.Connect.SUMS");
+                    Application.Names.Add("DS.TABLE", "=SnipperPro.Connect.TABLE");
                     Application.Names.Add("DS.VALIDATION", "=SnipperPro.Connect.VALIDATION");
                     Application.Names.Add("DS.EXCEPTION", "=SnipperPro.Connect.EXCEPTION");
 
                     _snippEngine = new SnipEngine(_application);
+                    ((Excel.AppEvents_Event)_application).SheetBeforeDoubleClick += OnSheetBeforeDoubleClick;
                     System.Diagnostics.Debug.WriteLine($"Snipper Pro: OnConnection successful via IDTExtensibility2 (Mode: {connectMode})");
                 }
             }
@@ -66,6 +76,7 @@ namespace SnipperCloneCleanFinal
                     System.Diagnostics.Debug.WriteLine($"Snipper Pro: OnDisconnection (Mode: {disconnectMode})");
                     if (_application != null)
                     {
+                        ((Excel.AppEvents_Event)_application).SheetBeforeDoubleClick -= OnSheetBeforeDoubleClick;
                         Marshal.ReleaseComObject(_application);
                         _application = null;
                     }
@@ -391,32 +402,24 @@ namespace SnipperCloneCleanFinal
                     case SnipMode.Table:
                         if (e.Success && !string.IsNullOrEmpty(e.ExtractedText))
                         {
-                            // For table snips, split by tabs and place in multiple cells
-                            var columns = e.ExtractedText.Split('\t');
-                            for (int i = 0; i < columns.Length; i++)
+                            var parser = new TableParser();
+                            var tableData = parser.ParseTable(e.ExtractedText);
+                            if (!tableData.IsEmpty)
                             {
-                                var cellToFill = activeCell.Offset[0, i];
-                                cellToFill.Value2 = columns[i].Trim();
-                                cellToFill.Borders.Color = GetSnipColorCode(e.SnipMode);
-                                
-                                // Add comment with source info
-                                try
+                                using (var helper = new ExcelHelper(Application))
                                 {
-                                    cellToFill.ClearComments();
-                                    var comment = cellToFill.AddComment($"Source: {Path.GetFileName(e.DocumentPath)}\nPage: {e.PageNumber}\nColumn {i+1} of table");
-                                    comment.Shape.TextFrame.AutoSize = true;
+                                    helper.WriteTableToRange(tableData, activeCell);
                                 }
-                                catch { }
+
+                                formula = DataSnipperFormulas.CreateTableFormula(e.DocumentPath, e.PageNumber,
+                                    tableData, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                                activeCell.Formula = formula;
+                                displayValue = $"Table: {tableData.RowCount}×{tableData.ColumnCount}";
                             }
-                            displayValue = "Table extracted: " + columns.Length + " columns";
-                            
-                            // Move to next row after table extraction
-                            try
+                            else
                             {
-                                var nextRow = activeCell.Offset[1, 0];
-                                nextRow.Select();
+                                displayValue = "Table extraction failed";
                             }
-                            catch { }
                         }
                         else
                         {
@@ -554,6 +557,27 @@ namespace SnipperCloneCleanFinal
         }
 
         [ComVisible(true)]
+        public object TABLE(string snipId)
+        {
+            var data = DataSnipperFormulas.GetSnipData(snipId);
+            if (data?.Table != null && data.Table.Rows.Count > 0)
+            {
+                var rows = data.Table.RowCount;
+                var cols = data.Table.ColumnCount;
+                var result = new object[rows, cols];
+                for (int r = 0; r < rows; r++)
+                {
+                    for (int c = 0; c < cols; c++)
+                    {
+                        result[r, c] = data.Table.GetCell(r, c);
+                    }
+                }
+                return result;
+            }
+            return "#N/A";
+        }
+
+        [ComVisible(true)]
         public object VALIDATION(string snipId)
         {
             return DataSnipperFormulas.GetSnipData(snipId) != null ? "✓" : "#N/A";
@@ -563,6 +587,26 @@ namespace SnipperCloneCleanFinal
         public object EXCEPTION(string snipId)
         {
             return DataSnipperFormulas.GetSnipData(snipId) != null ? "✗" : "#N/A";
+        }
+
+        private void OnSheetBeforeDoubleClick(object sh, Excel.Range target, ref bool cancel)
+        {
+            try
+            {
+                var formula = target.Formula as string;
+                if (string.IsNullOrWhiteSpace(formula)) return;
+
+                var match = System.Text.RegularExpressions.Regex.Match(formula, "=DS\\.(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\\(\"(?<id>[^\"]+)\"\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (match.Success)
+                {
+                    var snipId = match.Groups["id"].Value;
+                    if (DataSnipperFormulas.NavigateToSnip(snipId))
+                    {
+                        cancel = true;
+                    }
+                }
+            }
+            catch { }
         }
         #endregion
 

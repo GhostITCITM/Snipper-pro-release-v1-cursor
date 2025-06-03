@@ -4,13 +4,15 @@ namespace SnipperCloneCleanFinal.Infrastructure
 {
     public static class AuthManager
     {
-        public static bool IsAuthenticated { get; private set; } = true;
+        public static bool IsAuthenticated { get; private set; } = false;
 
         public static bool Authenticate(string username, string password)
         {
-            // Simple authentication placeholder
-            IsAuthenticated = true;
-            return true;
+            var validUser = Environment.GetEnvironmentVariable("SNIPPER_USER") ?? "admin";
+            var validPass = Environment.GetEnvironmentVariable("SNIPPER_PASS") ?? "snipper";
+            IsAuthenticated = string.Equals(username, validUser, StringComparison.OrdinalIgnoreCase)
+                && password == validPass;
+            return IsAuthenticated;
         }
 
         public static void Logout()

@@ -42,6 +42,14 @@ A powerful Excel add-in for extracting data from PDFs and images, designed for a
 5. Draw rectangles on documents to extract data
 6. Data appears in Excel with DS formulas
 
+### Formulas
+
+- `DS.TEXTS(id)` – return extracted text
+- `DS.SUMS(id)` – sum numbers from a snip
+- `DS.TABLE(id)` – return table data as an array
+- `DS.VALIDATION(id)` – show a ✓ mark
+- `DS.EXCEPTION(id)` – show an ✗ mark
+
 ## Project Structure
 
 - `SnipperCloneCleanFinal/` - Main C# project source code
