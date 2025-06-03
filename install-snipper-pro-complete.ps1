@@ -245,4 +245,4 @@ catch {
 }
 
 Write-Host ""
-Write-Host "Installation script completed. Check Excel for the SNIPPER PRO tab." -ForegroundColor Green 
+Write-Host "Installation script completed. Check Excel for the SNIPPER PRO tab." -ForegroundColor Green

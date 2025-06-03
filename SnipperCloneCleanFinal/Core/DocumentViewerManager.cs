@@ -480,4 +480,4 @@ namespace SnipperCloneCleanFinal.UI
         public string[] ExtractedNumbers { get; set; } = new string[0];
         public bool Success { get; set; } = true;
     }
-} 
+}

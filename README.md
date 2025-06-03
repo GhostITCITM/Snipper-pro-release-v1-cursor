@@ -67,4 +67,4 @@ Core components:
 
 ---
 
-*DataSnipper-compatible Excel add-in for professional document analysis* 
+*DataSnipper-compatible Excel add-in for professional document analysis*
