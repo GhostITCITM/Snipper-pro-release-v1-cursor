@@ -39,6 +39,13 @@ namespace SnipperCloneCleanFinal
                 lock (_lockObject)
                 {
                     _application = (Excel.Application)application;
+
+                    // Link DS formulas to UDF methods
+                    Application.Names.Add("DS.TEXTS", "=SnipperPro.Connect.TEXTS");
+                    Application.Names.Add("DS.SUMS", "=SnipperPro.Connect.SUMS");
+                    Application.Names.Add("DS.VALIDATION", "=SnipperPro.Connect.VALIDATION");
+                    Application.Names.Add("DS.EXCEPTION", "=SnipperPro.Connect.EXCEPTION");
+
                     _snippEngine = new SnipEngine(_application);
                     System.Diagnostics.Debug.WriteLine($"Snipper Pro: OnConnection successful via IDTExtensibility2 (Mode: {connectMode})");
                 }
