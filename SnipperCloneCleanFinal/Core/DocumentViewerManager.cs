@@ -190,6 +190,12 @@ namespace SnipperCloneCleanFinal.UI
             try
             {
                 _currentDocumentPath = filePath;
+
+                // Dispose previously loaded pages to avoid memory leaks
+                foreach (var page in _documentPages)
+                {
+                    page?.Dispose();
+                }
                 _documentPages.Clear();
                 
                 // For now, handle image files - PDF support would need additional library
