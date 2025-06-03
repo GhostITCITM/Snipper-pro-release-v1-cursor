@@ -50,6 +50,23 @@ if (Test-Path $projectDir) {
     exit 1
 }
 
+# Ensure tessdata is available
+$tessDir = "tessdata"
+if (-not (Test-Path $tessDir)) {
+    New-Item -ItemType Directory -Path $tessDir | Out-Null
+}
+$engData = Join-Path $tessDir "eng.traineddata"
+if (-not (Test-Path $engData)) {
+    Write-Host "Downloading default tessdata files..." -ForegroundColor Yellow
+    try {
+        $url = "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata"
+        Invoke-WebRequest -Uri $url -OutFile $engData
+        Write-Host "   ✓ Downloaded eng.traineddata" -ForegroundColor Green
+    } catch {
+        Write-Host "⚠ Failed to download tessdata: $_" -ForegroundColor Red
+    }
+}
+
 $projectFile = "SnipperCloneCleanFinal.csproj"
 if (!(Test-Path $projectFile)) {
     Write-Host "❌ ERROR: Project file not found: $projectFile" -ForegroundColor Red
