@@ -17,6 +17,7 @@ namespace SnipperCloneCleanFinal.UI
     public partial class DocumentViewer : Form
     {
         private readonly SnipEngine _snippEngine;
+        private readonly OCREngine _ocrEngine;
         private Panel _documentsPanel;
         private Panel _viewerPanel; 
         private PictureBox _documentPictureBox;
@@ -54,6 +55,7 @@ namespace SnipperCloneCleanFinal.UI
         public DocumentViewer(SnipEngine snippEngine)
         {
             _snippEngine = snippEngine ?? throw new ArgumentNullException(nameof(snippEngine));
+            _ocrEngine = new OCREngine();
             InitializeComponent();
             SetupUI();
             Logger.Info("DocumentViewer initialized with full functionality");
@@ -1058,16 +1060,15 @@ namespace SnipperCloneCleanFinal.UI
                     }
                     
                     // Process with OCR engine
-                    var ocrEngine = new SnipperCloneCleanFinal.Core.OCREngine();
-                    var initResult = await ocrEngine.InitializeAsync();
-                    
+                    var initResult = await _ocrEngine.InitializeAsync();
+
                     if (!initResult)
                     {
                         _statusLabel.Text = "OCR engine failed to initialize";
                         return;
                     }
-                    
-                    var ocrResult = await ocrEngine.RecognizeTextAsync(croppedImage);
+
+                    var ocrResult = await _ocrEngine.RecognizeTextAsync(croppedImage);
                     
                     // Create result based on snip mode
                     string extractedValue = "";
@@ -1399,7 +1400,8 @@ namespace SnipperCloneCleanFinal.UI
                     doc.Dispose();
                 }
                 _loadedDocuments.Clear();
-                
+                _ocrEngine?.Dispose();
+
                 Logger.Info("DocumentViewer disposed");
             }
             base.Dispose(disposing);
@@ -1481,8 +1483,7 @@ namespace SnipperCloneCleanFinal.UI
                     {
                         if (columnImage != null)
                         {
-                            var ocrEngine = new OCREngine();
-                            var ocrResult = ocrEngine.RecognizeTextAsync(columnImage).Result;
+                            var ocrResult = _ocrEngine.RecognizeTextAsync(columnImage).Result;
                             columnData.Add(ocrResult.Text);
                         }
                     }
@@ -1501,8 +1502,7 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     if (columnImage != null)
                     {
-                        var ocrEngine = new OCREngine();
-                        var ocrResult = ocrEngine.RecognizeTextAsync(columnImage).Result;
+                        var ocrResult = _ocrEngine.RecognizeTextAsync(columnImage).Result;
                         columnData.Add(ocrResult.Text);
                     }
                 }
