@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
+using Tesseract;
 
 namespace SnipperCloneCleanFinal.Core
 {
@@ -25,22 +26,24 @@ namespace SnipperCloneCleanFinal.Core
         public async Task<OCRResult> RecognizeTextAsync(Bitmap image)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(OCREngine));
-            
+
             return await Task.Run(() =>
             {
                 try
                 {
-                    // Since we're working with PDF renders, we can use Windows OCR API
-                    // or extract text directly from the rendered bitmap
-                    var extractedText = ExtractTextFromBitmap(image);
+                    using var engine = new TesseractEngine("./tessdata", "eng", EngineMode.Default);
+                    using var pix = PixConverter.ToPix(image);
+                    using var page = engine.Process(pix);
+
+                    var extractedText = page.GetText();
                     var numbers = ExtractNumbers(extractedText);
-                    
+
                     return new OCRResult
                     {
                         Success = !string.IsNullOrWhiteSpace(extractedText),
-                        Text = extractedText?.Trim() ?? "",
+                        Text = extractedText?.Trim() ?? string.Empty,
                         Numbers = numbers,
-                        Confidence = CalculateConfidence(extractedText),
+                        Confidence = page.GetMeanConfidence() * 100.0,
                         ErrorMessage = string.IsNullOrWhiteSpace(extractedText) ? "No text detected" : null
                     };
                 }
@@ -50,7 +53,7 @@ namespace SnipperCloneCleanFinal.Core
                     {
                         Success = false,
                         ErrorMessage = $"OCR failed: {ex.Message}",
-                        Text = "",
+                        Text = string.Empty,
                         Numbers = new string[0]
                     };
                 }
@@ -59,19 +62,10 @@ namespace SnipperCloneCleanFinal.Core
 
         private string ExtractTextFromBitmap(Bitmap image)
         {
-            // For PDF renders from PdfiumViewer, we can analyze the bitmap
-            // Since PDF text is already rendered as high-quality text, we can use Windows OCR
-            
-            try
-            {
-                // Try using Windows.Media.Ocr if available (Windows 10+)
-                return ExtractUsingWindowsOCR(image);
-            }
-            catch
-            {
-                // Fallback to analyzing the bitmap directly
-                return AnalyzeBitmapForText(image);
-            }
+            using var engine = new TesseractEngine("./tessdata", "eng", EngineMode.Default);
+            using var pix = PixConverter.ToPix(image);
+            using var page = engine.Process(pix);
+            return page.GetText();
         }
 
         private string ExtractUsingWindowsOCR(Bitmap image)

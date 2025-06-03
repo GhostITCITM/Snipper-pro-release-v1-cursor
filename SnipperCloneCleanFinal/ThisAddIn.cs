@@ -433,8 +433,14 @@ namespace SnipperCloneCleanFinal
                 // Insert the value into Excel (except for table which handles its own cells)
                 if (!string.IsNullOrEmpty(displayValue) && e.SnipMode != SnipMode.Table)
                 {
-                    // Set the value directly
-                    activeCell.Value2 = displayValue;
+                    if (!string.IsNullOrEmpty(formula))
+                    {
+                        activeCell.Formula = formula;
+                    }
+                    else
+                    {
+                        activeCell.Value2 = displayValue;
+                    }
                     
                     // Add comment with source info instead of formula
                     try
@@ -515,6 +521,41 @@ namespace SnipperCloneCleanFinal
                 SnipMode.Exception => 255,    // Red
                 _ => 8421504 // Gray
             };
+        }
+
+        // Excel UDFs for DataSnipper formulas
+        [ComVisible(true)]
+        public object TEXTS(string snipId)
+        {
+            var data = DataSnipperFormulas.GetSnipData(snipId);
+            return data != null ? data.ExtractedValue ?? string.Empty : "#N/A";
+        }
+
+        [ComVisible(true)]
+        public object SUMS(string snipId)
+        {
+            var data = DataSnipperFormulas.GetSnipData(snipId);
+            if (data != null)
+            {
+                if (data.Numbers != null && data.Numbers.Count > 0)
+                    return data.Numbers.Sum();
+                if (double.TryParse(data.ExtractedValue, out var val))
+                    return val;
+                return data.ExtractedValue ?? string.Empty;
+            }
+            return "#N/A";
+        }
+
+        [ComVisible(true)]
+        public object VALIDATION(string snipId)
+        {
+            return DataSnipperFormulas.GetSnipData(snipId) != null ? "✓" : "#N/A";
+        }
+
+        [ComVisible(true)]
+        public object EXCEPTION(string snipId)
+        {
+            return DataSnipperFormulas.GetSnipData(snipId) != null ? "✗" : "#N/A";
         }
         #endregion
 

@@ -45,6 +45,9 @@ namespace SnipperCloneCleanFinal.UI
         private List<System.Drawing.Rectangle> _tableColumns = new List<System.Drawing.Rectangle>();
         private List<System.Drawing.Rectangle> _tableRows = new List<System.Drawing.Rectangle>();
         private bool _showTableGrid = false;
+        private bool _adjustingTable = false;
+        private int _draggingColumnIndex = -1;
+        private int _dragStartX;
         
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
 
@@ -213,6 +216,7 @@ namespace SnipperCloneCleanFinal.UI
             _documentPictureBox.MouseMove += OnMouseMove;
             _documentPictureBox.MouseUp += OnMouseUp;
             _documentPictureBox.Paint += OnPaint;
+            _documentPictureBox.DoubleClick += OnPictureDoubleClick;
 
             _viewerPanel.Controls.Add(_documentPictureBox);
             this.Controls.Add(_viewerPanel);
@@ -886,8 +890,54 @@ namespace SnipperCloneCleanFinal.UI
 
         private void OnMouseDown(object sender, MouseEventArgs e)
         {
+            if (_adjustingTable)
+            {
+                if (e.Button == MouseButtons.Left && _currentSelection.Contains(e.Location))
+                {
+                    for (int i = 0; i < _tableColumns.Count; i++)
+                    {
+                        var hit = _tableColumns[i];
+                        var hitZone = new System.Drawing.Rectangle(hit.X - 5, hit.Y, hit.Width + 10, hit.Height);
+                        if (hitZone.Contains(e.Location))
+                        {
+                            _draggingColumnIndex = i;
+                            _dragStartX = e.X;
+                            _documentPictureBox.Cursor = Cursors.VSplit;
+                            return;
+                        }
+                    }
+                    return;
+                }
+                if (e.Button == MouseButtons.Right && _currentSelection.Contains(e.Location))
+                {
+                    for (int i = 0; i < _tableColumns.Count; i++)
+                    {
+                        if (_tableColumns[i].Contains(e.Location))
+                        {
+                            _tableColumns.RemoveAt(i);
+                            _documentPictureBox.Invalidate();
+                            return;
+                        }
+                    }
+                    var newRectX = e.X - 2;
+                    if (newRectX > _currentSelection.X && newRectX < _currentSelection.Right - 4)
+                    {
+                        _tableColumns.Add(new System.Drawing.Rectangle(newRectX, _currentSelection.Y, 4, _currentSelection.Height));
+                        _tableColumns = _tableColumns.OrderBy(c => c.X).ToList();
+                        _documentPictureBox.Invalidate();
+                    }
+                    return;
+                }
+                if (! _currentSelection.Contains(e.Location))
+                {
+                    _adjustingTable = false;
+                    _tableColumns.Clear();
+                    _showTableGrid = false;
+                }
+            }
+
             if (!_isSnipMode || e.Button != MouseButtons.Left) return;
-            
+
             _isSelecting = true;
             _selectionStart = e.Location;
             _selectionEnd = e.Location;
@@ -896,28 +946,77 @@ namespace SnipperCloneCleanFinal.UI
 
         private void OnMouseMove(object sender, MouseEventArgs e)
         {
+            if (_draggingColumnIndex >= 0 && _adjustingTable)
+            {
+                var rect = _tableColumns[_draggingColumnIndex];
+                int newX = rect.X + (e.X - _dragStartX);
+                newX = Math.Max(_currentSelection.X, Math.Min(newX, _currentSelection.Right - rect.Width));
+                rect.X = newX;
+                _tableColumns[_draggingColumnIndex] = rect;
+                _dragStartX = e.X;
+                _documentPictureBox.Invalidate();
+                return;
+            }
+
+            if (_adjustingTable)
+            {
+                bool overLine = false;
+                foreach (var col in _tableColumns)
+                {
+                    var zone = new System.Drawing.Rectangle(col.X - 5, col.Y, col.Width + 10, col.Height);
+                    if (zone.Contains(e.Location)) { overLine = true; break; }
+                }
+                _documentPictureBox.Cursor = overLine ? Cursors.VSplit : Cursors.Default;
+            }
+
             if (!_isSelecting) return;
-            
+
             _selectionEnd = e.Location;
             _currentSelection = GetNormalizedRectangle(_selectionStart, _selectionEnd);
-            
+
             // For table snip, show column dividers
             if (_currentSnipMode == SnipMode.Table && _currentSelection.Width > 20)
             {
                 DetectTableStructure(_currentSelection);
             }
-            
+
             _documentPictureBox.Invalidate();
         }
 
         private async void OnMouseUp(object sender, MouseEventArgs e)
         {
+            if (_draggingColumnIndex >= 0)
+            {
+                _draggingColumnIndex = -1;
+                _documentPictureBox.Cursor = Cursors.Default;
+                return;
+            }
+
             if (!_isSelecting || e.Button != MouseButtons.Left) return;
-            
+
             _isSelecting = false;
             
             if (_currentSelection.Width > 5 && _currentSelection.Height > 5)
             {
+                if (_currentSnipMode == SnipMode.Table)
+                {
+                    _adjustingTable = true;
+                    _showTableGrid = true;
+                    _statusLabel.Text = "Adjust columns then double-click to finish";
+                }
+                else
+                {
+                    await ProcessSnip();
+                }
+            }
+        }
+
+        private async void OnPictureDoubleClick(object sender, EventArgs e)
+        {
+            if (_adjustingTable)
+            {
+                _adjustingTable = false;
+                _showTableGrid = false;
                 await ProcessSnip();
             }
         }
@@ -1166,11 +1265,7 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     foreach (var column in _tableColumns)
                     {
-                        e.Graphics.DrawRectangle(pen, column);
-                    }
-                    foreach (var row in _tableRows)
-                    {
-                        e.Graphics.DrawRectangle(pen, row);
+                        e.Graphics.DrawLine(pen, column.X + column.Width / 2, column.Y, column.X + column.Width / 2, column.Y + column.Height);
                     }
                 }
             }
