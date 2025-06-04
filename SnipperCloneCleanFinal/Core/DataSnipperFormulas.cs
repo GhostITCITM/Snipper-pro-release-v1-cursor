@@ -25,7 +25,7 @@ namespace SnipperCloneCleanFinal.Core
             };
             
             _snipDatabase[snipId] = snipData;
-            return $"=DS.TEXTS(\"{snipId}\")";
+            return $"=SnipperPro.Connect.TEXTS(\"{snipId}\")";
         }
         
         public static string CreateSumFormula(string documentPath, int pageNumber, double sumValue, Rectangle bounds, List<double> numbers)
@@ -44,7 +44,7 @@ namespace SnipperCloneCleanFinal.Core
             };
 
             _snipDatabase[snipId] = snipData;
-            return $"=DS.SUMS(\"{snipId}\")";
+            return $"=SnipperPro.Connect.SUMS(\"{snipId}\")";
         }
 
         public static string CreateTableFormula(string documentPath, int pageNumber, TableData table, Rectangle bounds)
@@ -62,7 +62,7 @@ namespace SnipperCloneCleanFinal.Core
             };
 
             _snipDatabase[snipId] = snipData;
-            return $"=DS.TABLE(\"{snipId}\")";
+            return $"=SnipperPro.Connect.TABLE(\"{snipId}\")";
         }
         
         public static string CreateValidationFormula(string documentPath, int pageNumber, Rectangle bounds)
@@ -80,7 +80,7 @@ namespace SnipperCloneCleanFinal.Core
             };
             
             _snipDatabase[snipId] = snipData;
-            return $"=DS.VALIDATION(\"{snipId}\")";
+            return $"=SnipperPro.Connect.VALIDATION(\"{snipId}\")";
         }
         
         public static string CreateExceptionFormula(string documentPath, int pageNumber, Rectangle bounds, string reason = "")
@@ -99,7 +99,7 @@ namespace SnipperCloneCleanFinal.Core
             };
             
             _snipDatabase[snipId] = snipData;
-            return $"=DS.EXCEPTION(\"{snipId}\")";
+            return $"=SnipperPro.Connect.EXCEPTION(\"{snipId}\")";
         }
         
         public static SnipData GetSnipData(string snipId)

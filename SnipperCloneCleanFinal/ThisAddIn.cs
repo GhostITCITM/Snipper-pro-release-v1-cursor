@@ -48,15 +48,40 @@ namespace SnipperCloneCleanFinal
                         return;
                     }
 
-                    // Link DS formulas to UDF methods
-                    Application.Names.Add("DS.TEXTS", "=SnipperPro.Connect.TEXTS");
-                    Application.Names.Add("DS.SUMS", "=SnipperPro.Connect.SUMS");
-                    Application.Names.Add("DS.TABLE", "=SnipperPro.Connect.TABLE");
-                    Application.Names.Add("DS.VALIDATION", "=SnipperPro.Connect.VALIDATION");
-                    Application.Names.Add("DS.EXCEPTION", "=SnipperPro.Connect.EXCEPTION");
-
                     _snippEngine = new SnipEngine(_application);
-                    ((Excel.AppEvents_Event)_application).SheetBeforeDoubleClick += OnSheetBeforeDoubleClick;
+                    
+                    // Safely try to register Excel defined names for DS formulas
+                    try
+                    {
+                        if (_application != null && _application.Names != null)
+                        {
+                            Application.Names.Add("DS.TEXTS", "=SnipperPro.Connect.TEXTS");
+                            Application.Names.Add("DS.SUMS", "=SnipperPro.Connect.SUMS");
+                            Application.Names.Add("DS.TABLE", "=SnipperPro.Connect.TABLE");
+                            Application.Names.Add("DS.VALIDATION", "=SnipperPro.Connect.VALIDATION");
+                            Application.Names.Add("DS.EXCEPTION", "=SnipperPro.Connect.EXCEPTION");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Snipper Pro: Could not register defined names: {ex.Message}");
+                        // Continue without defined names - they're not critical for basic functionality
+                    }
+                    
+                    // Safely try to register event handlers
+                    try
+                    {
+                        if (_application != null)
+                        {
+                            ((Excel.AppEvents_Event)_application).SheetBeforeDoubleClick += OnSheetBeforeDoubleClick;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Snipper Pro: Could not register event handlers: {ex.Message}");
+                        // Continue without event handlers
+                    }
+                    
                     System.Diagnostics.Debug.WriteLine($"Snipper Pro: OnConnection successful via IDTExtensibility2 (Mode: {connectMode})");
                 }
             }
@@ -443,20 +468,19 @@ namespace SnipperCloneCleanFinal
                 // Insert the value into Excel (except for table which handles its own cells)
                 if (!string.IsNullOrEmpty(displayValue) && e.SnipMode != SnipMode.Table)
                 {
-                    if (!string.IsNullOrEmpty(formula))
-                    {
-                        activeCell.Formula = formula;
-                    }
-                    else
-                    {
-                        activeCell.Value2 = displayValue;
-                    }
+                    // Always put the actual value in the cell instead of the formula to avoid #NAME? errors
+                    activeCell.Value2 = displayValue;
                     
-                    // Add comment with source info instead of formula
+                    // Add comment with source info and formula for reference
                     try
                     {
                         activeCell.ClearComments();
-                        var comment = activeCell.AddComment($"Source: {Path.GetFileName(e.DocumentPath)}\nPage: {e.PageNumber}\nSnip Type: {e.SnipMode}");
+                        var commentText = $"Source: {Path.GetFileName(e.DocumentPath)}\nPage: {e.PageNumber}\nSnip Type: {e.SnipMode}";
+                        if (!string.IsNullOrEmpty(formula))
+                        {
+                            commentText += $"\nFormula: {formula}";
+                        }
+                        var comment = activeCell.AddComment(commentText);
                         comment.Shape.TextFrame.AutoSize = true;
                     }
                     catch { }
@@ -596,7 +620,7 @@ namespace SnipperCloneCleanFinal
                 var formula = target.Formula as string;
                 if (string.IsNullOrWhiteSpace(formula)) return;
 
-                var match = System.Text.RegularExpressions.Regex.Match(formula, "=DS\\.(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\\(\"(?<id>[^\"]+)\"\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var match = System.Text.RegularExpressions.Regex.Match(formula, @"=DS\.(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\(""(?<id>[^""]+)""\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (match.Success)
                 {
                     var snipId = match.Groups["id"].Value;

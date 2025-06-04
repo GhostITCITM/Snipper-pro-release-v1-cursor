@@ -33,7 +33,7 @@ if (-not $msBuildPath) {
 }
 
 if (-not $msBuildPath) {
-    Write-Host "❌ ERROR: MSBuild not found. Please install Visual Studio 2022 or Build Tools." -ForegroundColor Red
+    Write-Host "ERROR: MSBuild not found. Please install Visual Studio 2022 or Build Tools." -ForegroundColor Red
     Write-Host "Download VS2022 Build Tools: https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022" -ForegroundColor Yellow
     exit 1
 }
@@ -46,7 +46,7 @@ if (Test-Path $projectDir) {
     Set-Location $projectDir
     Write-Host "Changed to project directory: $projectDir" -ForegroundColor Yellow
 } else {
-    Write-Host "❌ ERROR: Project directory not found: $projectDir" -ForegroundColor Red
+    Write-Host "ERROR: Project directory not found: $projectDir" -ForegroundColor Red
     exit 1
 }
 
@@ -61,15 +61,15 @@ if (-not (Test-Path $engData)) {
     try {
         $url = "https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata"
         Invoke-WebRequest -Uri $url -OutFile $engData
-        Write-Host "   ✓ Downloaded eng.traineddata" -ForegroundColor Green
+        Write-Host "Downloaded eng.traineddata" -ForegroundColor Green
     } catch {
-        Write-Host "⚠ Failed to download tessdata: $_" -ForegroundColor Red
+        Write-Host "Failed to download tessdata: $_" -ForegroundColor Red
     }
 }
 
 $projectFile = "SnipperCloneCleanFinal.csproj"
 if (!(Test-Path $projectFile)) {
-    Write-Host "❌ ERROR: Project file not found: $projectFile" -ForegroundColor Red
+    Write-Host "ERROR: Project file not found: $projectFile" -ForegroundColor Red
     exit 1
 }
 
@@ -84,7 +84,7 @@ Write-Host "Restoring NuGet packages..." -ForegroundColor Yellow
 & $nugetExe restore "packages.config" -PackagesDirectory "..\packages" | Out-Null
 
 # Build the project
-Write-Host "`nBuilding project..." -ForegroundColor Yellow
+Write-Host "Building project..." -ForegroundColor Yellow
 $buildArgs = @(
     $projectFile,
     "/p:Configuration=Release",
@@ -100,9 +100,9 @@ if ($LASTEXITCODE -eq 0) {
     $outputDll = "bin\Release\SnipperCloneCleanFinal.dll"
     $outputDllDir = Split-Path $outputDll -Parent
     if (Test-Path $outputDll) {
-        Write-Host "`n✅ Build completed successfully!" -ForegroundColor Green
+        Write-Host "Build completed successfully!" -ForegroundColor Green
         Write-Host "Output DLL: $outputDll" -ForegroundColor Green
-        Write-Host "`nNext steps:" -ForegroundColor Cyan
+        Write-Host "Next steps:" -ForegroundColor Cyan
         Write-Host "1. Run install-snipper-pro.ps1 as Administrator to install the add-in" -ForegroundColor White
 
         # Copy native Pdfium DLLs
@@ -118,11 +118,41 @@ if ($LASTEXITCODE -eq 0) {
         } else {
             Write-Host "WARNING: Pdfium native DLLs not found; PDF rendering will fail" -ForegroundColor Red
         }
+
+        # Copy native Tesseract DLLs
+        $tesseractNativePath = "..\packages\Tesseract.5.2.0\x64"
+        if (Test-Path $tesseractNativePath) {
+            $leptonicaDll = Join-Path $tesseractNativePath "leptonica-1.82.0.dll"
+            $tesseractDll = Join-Path $tesseractNativePath "tesseract50.dll"
+            
+            if (Test-Path $leptonicaDll) {
+                Copy-Item $leptonicaDll "$outputDllDir\" -Force
+                Write-Host "Copied leptonica-1.82.0.dll to output directory" -ForegroundColor Green
+            }
+            
+            if (Test-Path $tesseractDll) {
+                Copy-Item $tesseractDll "$outputDllDir\" -Force
+                Write-Host "Copied tesseract50.dll to output directory" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "WARNING: Tesseract native DLLs not found; OCR will fail" -ForegroundColor Red
+        }
+
+        # Copy tessdata directory to output
+        $tessdataSource = "tessdata"
+        $tessdataTarget = "$outputDllDir\tessdata"
+        if (Test-Path $tessdataSource) {
+            if (Test-Path $tessdataTarget) {
+                Remove-Item $tessdataTarget -Recurse -Force
+            }
+            Copy-Item $tessdataSource $tessdataTarget -Recurse -Force
+            Write-Host "Copied tessdata directory to output" -ForegroundColor Green
+        }
     } else {
-        Write-Host "`n❌ Build succeeded but output DLL not found at: $outputDll" -ForegroundColor Red
+        Write-Host "Build succeeded but output DLL not found at: $outputDll" -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "`n❌ Build failed with exit code: $LASTEXITCODE" -ForegroundColor Red
+    Write-Host "Build failed with exit code: $LASTEXITCODE" -ForegroundColor Red
     exit $LASTEXITCODE
 }
