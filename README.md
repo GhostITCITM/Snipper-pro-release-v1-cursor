@@ -5,6 +5,7 @@ A powerful Excel add-in for extracting data from PDFs and images, designed for a
 ## Features
 
 - **Real OCR Engine**: Extract text and numbers from images and PDFs
+- **Heuristic OCR Fallback**: Uses local heuristics when the `tesseract` CLI is not available
 - **Multiple Snip Types**: Text, Sum, Table, Validation, and Exception snips
 - **Excel Integration**: Full ribbon interface with DataSnipper-style formulas
 - **Document Viewer**: Load and manage multiple documents simultaneously
@@ -62,6 +63,8 @@ A powerful Excel add-in for extracting data from PDFs and images, designed for a
 - .NET Framework 4.8
 - Microsoft Excel (COM Interop)
 - Windows with PowerShell execution policy enabled
+- Optional: [Tesseract OCR CLI](https://tesseract-ocr.github.io/) for improved accuracy.
+  Set the `TESSERACT_PATH` environment variable to the executable if installed.
 
 ## Architecture
 
