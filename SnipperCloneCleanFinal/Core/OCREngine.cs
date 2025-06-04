@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Diagnostics;
 using System.IO;
+using Tesseract;
 
 namespace SnipperCloneCleanFinal.Core
 {
@@ -20,6 +21,7 @@ namespace SnipperCloneCleanFinal.Core
     {
         private bool _disposed = false;
         private static bool _tesseractAvailable = false;
+        private static bool _tesseractLibAvailable = false;
         private static string _tesseractError = null;
 
         static OCREngine()
@@ -34,11 +36,15 @@ namespace SnipperCloneCleanFinal.Core
                 }
 
                 _tesseractAvailable = File.Exists(tesseractPath);
+                // Check if Tesseract library is present
+                _ = typeof(TesseractEngine);
+                _tesseractLibAvailable = true;
             }
             catch (Exception ex)
             {
                 _tesseractError = ex.Message;
                 _tesseractAvailable = false;
+                _tesseractLibAvailable = false;
             }
 
             if (!_tesseractAvailable)
@@ -56,7 +62,7 @@ namespace SnipperCloneCleanFinal.Core
         {
             if (_disposed) throw new ObjectDisposedException(nameof(OCREngine));
 
-            if (!_tesseractAvailable)
+            if (!_tesseractAvailable && !_tesseractLibAvailable)
             {
                 var fallbackText = AnalyzeBitmapForText(image);
                 return new OCRResult
@@ -71,44 +77,63 @@ namespace SnipperCloneCleanFinal.Core
 
             try
             {
-                string tempInput = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
-                string tempOutputBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-                image.Save(tempInput, ImageFormat.Png);
-
-                var tesseractPath = Environment.GetEnvironmentVariable("TESSERACT_PATH");
-                if (string.IsNullOrEmpty(tesseractPath))
+                if (_tesseractAvailable)
                 {
-                    tesseractPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "tesseract.exe" : "/usr/bin/tesseract";
+                    string tempInput = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+                    string tempOutputBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+                    image.Save(tempInput, ImageFormat.Png);
+
+                    var tesseractPath = Environment.GetEnvironmentVariable("TESSERACT_PATH");
+                    if (string.IsNullOrEmpty(tesseractPath))
+                    {
+                        tesseractPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "tesseract.exe" : "/usr/bin/tesseract";
+                    }
+
+                    var psi = new ProcessStartInfo(tesseractPath, $"\"{tempInput}\" \"{tempOutputBase}\" -l eng --oem 3 --psm 6")
+                    {
+                        RedirectStandardError = true,
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+
+                    using (var proc = Process.Start(psi))
+                    {
+                        await proc.WaitForExitAsync();
+                    }
+
+                    string textPath = tempOutputBase + ".txt";
+                    string extractedText = File.Exists(textPath) ? await File.ReadAllTextAsync(textPath) : string.Empty;
+
+                    File.Delete(tempInput);
+                    if (File.Exists(textPath)) File.Delete(textPath);
+
+                    var numbers = ExtractNumbers(extractedText);
+                    return new OCRResult
+                    {
+                        Success = !string.IsNullOrWhiteSpace(extractedText),
+                        Text = extractedText?.Trim() ?? string.Empty,
+                        Numbers = numbers,
+                        Confidence = 90.0,
+                        ErrorMessage = string.IsNullOrWhiteSpace(extractedText) ? "No text detected" : null
+                    };
                 }
-
-                var psi = new ProcessStartInfo(tesseractPath, $"\"{tempInput}\" \"{tempOutputBase}\" -l eng --oem 3 --psm 6")
+                else if (_tesseractLibAvailable)
                 {
-                    RedirectStandardError = true,
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                using (var proc = Process.Start(psi))
-                {
-                    await proc.WaitForExitAsync();
+                    return RecognizeUsingLibrary(image);
                 }
-
-                string textPath = tempOutputBase + ".txt";
-                string extractedText = File.Exists(textPath) ? await File.ReadAllTextAsync(textPath) : string.Empty;
-
-                File.Delete(tempInput);
-                if (File.Exists(textPath)) File.Delete(textPath);
-
-                var numbers = ExtractNumbers(extractedText);
-                return new OCRResult
+                else
                 {
-                    Success = !string.IsNullOrWhiteSpace(extractedText),
-                    Text = extractedText?.Trim() ?? string.Empty,
-                    Numbers = numbers,
-                    Confidence = 90.0,
-                    ErrorMessage = string.IsNullOrWhiteSpace(extractedText) ? "No text detected" : null
-                };
+                    var fallbackText = AnalyzeBitmapForText(image);
+                    return new OCRResult
+                    {
+                        Success = true,
+                        ErrorMessage = _tesseractError,
+                        Text = fallbackText ?? "No text detected",
+                        Numbers = ExtractNumbers(fallbackText ?? string.Empty),
+                        Confidence = 75.0
+                    };
+                }
             }
             catch (Exception ex)
             {
@@ -128,6 +153,39 @@ namespace SnipperCloneCleanFinal.Core
         {
             // Use our fallback bitmap analysis since Tesseract may not be available
             return AnalyzeBitmapForText(image);
+        }
+
+        private OCRResult RecognizeUsingLibrary(Bitmap image)
+        {
+            try
+            {
+                var dataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata");
+                using (var engine = new TesseractEngine(dataPath, "eng", EngineMode.Default))
+                using (var pix = PixConverter.ToPix(image))
+                using (var page = engine.Process(pix))
+                {
+                    var text = page.GetText();
+                    var numbers = ExtractNumbers(text);
+                    return new OCRResult
+                    {
+                        Success = !string.IsNullOrWhiteSpace(text),
+                        Text = text?.Trim() ?? string.Empty,
+                        Numbers = numbers,
+                        Confidence = page.GetMeanConfidence() * 100
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new OCRResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message,
+                    Text = string.Empty,
+                    Numbers = new string[0],
+                    Confidence = 0
+                };
+            }
         }
 
         private string AnalyzeBitmapForText(Bitmap image)
