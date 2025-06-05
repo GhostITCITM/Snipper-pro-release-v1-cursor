@@ -1,0 +1,15 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SnipperCloneCleanFinal", "SnipperCloneCleanFinal\SnipperCloneCleanFinal.csproj", "{12345678-1234-1234-1234-123456789ABC}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Release|AnyCPU = Release|AnyCPU
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {12345678-1234-1234-1234-123456789ABC}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
+        {12345678-1234-1234-1234-123456789ABC}.Release|AnyCPU.Build.0 = Release|AnyCPU
+    EndGlobalSection
+EndGlobal

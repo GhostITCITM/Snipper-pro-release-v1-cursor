@@ -892,124 +892,214 @@ namespace SnipperCloneCleanFinal.UI
 
         private void OnMouseDown(object sender, MouseEventArgs e)
         {
-            if (_adjustingTable)
+            try
             {
-                if (e.Button == MouseButtons.Left && _currentSelection.Contains(e.Location))
-                {
-                    for (int i = 0; i < _tableColumns.Count; i++)
-                    {
-                        var hit = _tableColumns[i];
-                        var hitZone = new System.Drawing.Rectangle(hit.X - 5, hit.Y, hit.Width + 10, hit.Height);
-                        if (hitZone.Contains(e.Location))
-                        {
-                            _draggingColumnIndex = i;
-                            _dragStartX = e.X;
-                            _documentPictureBox.Cursor = Cursors.VSplit;
-                            return;
-                        }
-                    }
+                // Check if the PictureBox is valid and not disposed
+                if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
-                }
-                if (e.Button == MouseButtons.Right && _currentSelection.Contains(e.Location))
+
+                if (_adjustingTable)
                 {
-                    for (int i = 0; i < _tableColumns.Count; i++)
+                    if (e.Button == MouseButtons.Left && _currentSelection.Contains(e.Location))
                     {
-                        if (_tableColumns[i].Contains(e.Location))
+                        for (int i = 0; i < _tableColumns.Count; i++)
                         {
-                            _tableColumns.RemoveAt(i);
-                            _documentPictureBox.Invalidate();
-                            return;
+                            var hit = _tableColumns[i];
+                            var hitZone = new System.Drawing.Rectangle(hit.X - 5, hit.Y, hit.Width + 10, hit.Height);
+                            if (hitZone.Contains(e.Location))
+                            {
+                                _draggingColumnIndex = i;
+                                _dragStartX = e.X;
+                                try
+                                {
+                                    _documentPictureBox.Cursor = Cursors.VSplit;
+                                }
+                                catch (Exception)
+                                {
+                                    // Ignore cursor setting errors
+                                }
+                                return;
+                            }
                         }
+                        return;
                     }
-                    var newRectX = e.X - 2;
-                    if (newRectX > _currentSelection.X && newRectX < _currentSelection.Right - 4)
+                    if (e.Button == MouseButtons.Right && _currentSelection.Contains(e.Location))
                     {
-                        _tableColumns.Add(new System.Drawing.Rectangle(newRectX, _currentSelection.Y, 4, _currentSelection.Height));
-                        _tableColumns = _tableColumns.OrderBy(c => c.X).ToList();
-                        _documentPictureBox.Invalidate();
+                        for (int i = 0; i < _tableColumns.Count; i++)
+                        {
+                            if (_tableColumns[i].Contains(e.Location))
+                            {
+                                _tableColumns.RemoveAt(i);
+                                SafeInvalidate();
+                                return;
+                            }
+                        }
+                        var newRectX = e.X - 2;
+                        if (newRectX > _currentSelection.X && newRectX < _currentSelection.Right - 4)
+                        {
+                            _tableColumns.Add(new System.Drawing.Rectangle(newRectX, _currentSelection.Y, 4, _currentSelection.Height));
+                            _tableColumns = _tableColumns.OrderBy(c => c.X).ToList();
+                            SafeInvalidate();
+                        }
+                        return;
                     }
-                    return;
+                    if (! _currentSelection.Contains(e.Location))
+                    {
+                        _adjustingTable = false;
+                        _tableColumns.Clear();
+                        _showTableGrid = false;
+                    }
                 }
-                if (! _currentSelection.Contains(e.Location))
-                {
-                    _adjustingTable = false;
-                    _tableColumns.Clear();
-                    _showTableGrid = false;
-                }
+
+                if (!_isSnipMode || e.Button != MouseButtons.Left) return;
+
+                _isSelecting = true;
+                _selectionStart = e.Location;
+                _selectionEnd = e.Location;
+                _currentSelection = System.Drawing.Rectangle.Empty;
             }
-
-            if (!_isSnipMode || e.Button != MouseButtons.Left) return;
-
-            _isSelecting = true;
-            _selectionStart = e.Location;
-            _selectionEnd = e.Location;
-            _currentSelection = System.Drawing.Rectangle.Empty;
+            catch (System.Runtime.InteropServices.SEHException)
+            {
+                // Handle SEH exceptions from unmanaged code
+                System.Diagnostics.Debug.WriteLine("SEH Exception in OnMouseDown - ignoring");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in OnMouseDown: {ex.Message}");
+            }
         }
 
         private void OnMouseMove(object sender, MouseEventArgs e)
         {
-            if (_draggingColumnIndex >= 0 && _adjustingTable)
+            try
             {
-                var rect = _tableColumns[_draggingColumnIndex];
-                int newX = rect.X + (e.X - _dragStartX);
-                newX = Math.Max(_currentSelection.X, Math.Min(newX, _currentSelection.Right - rect.Width));
-                rect.X = newX;
-                _tableColumns[_draggingColumnIndex] = rect;
-                _dragStartX = e.X;
-                _documentPictureBox.Invalidate();
-                return;
-            }
+                // Check if the PictureBox is valid and not disposed
+                if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
+                    return;
 
-            if (_adjustingTable)
-            {
-                bool overLine = false;
-                foreach (var col in _tableColumns)
+                if (_draggingColumnIndex >= 0 && _adjustingTable)
                 {
-                    var zone = new System.Drawing.Rectangle(col.X - 5, col.Y, col.Width + 10, col.Height);
-                    if (zone.Contains(e.Location)) { overLine = true; break; }
+                    if (_draggingColumnIndex < _tableColumns.Count)
+                    {
+                        var rect = _tableColumns[_draggingColumnIndex];
+                        int newX = rect.X + (e.X - _dragStartX);
+                        newX = Math.Max(_currentSelection.X, Math.Min(newX, _currentSelection.Right - rect.Width));
+                        rect.X = newX;
+                        _tableColumns[_draggingColumnIndex] = rect;
+                        _dragStartX = e.X;
+                        SafeInvalidate();
+                    }
+                    return;
                 }
-                _documentPictureBox.Cursor = overLine ? Cursors.VSplit : Cursors.Default;
+
+                if (_adjustingTable)
+                {
+                    bool overLine = false;
+                    foreach (var col in _tableColumns)
+                    {
+                        var zone = new System.Drawing.Rectangle(col.X - 5, col.Y, col.Width + 10, col.Height);
+                        if (zone.Contains(e.Location)) { overLine = true; break; }
+                    }
+                    
+                    try
+                    {
+                        _documentPictureBox.Cursor = overLine ? Cursors.VSplit : Cursors.Default;
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore cursor setting errors
+                    }
+                }
+
+                if (!_isSelecting) return;
+
+                _selectionEnd = e.Location;
+                _currentSelection = GetNormalizedRectangle(_selectionStart, _selectionEnd);
+
+                // For table snip, show column dividers
+                if (_currentSnipMode == SnipMode.Table && _currentSelection.Width > 20)
+                {
+                    DetectTableStructure(_currentSelection);
+                }
+
+                SafeInvalidate();
             }
-
-            if (!_isSelecting) return;
-
-            _selectionEnd = e.Location;
-            _currentSelection = GetNormalizedRectangle(_selectionStart, _selectionEnd);
-
-            // For table snip, show column dividers
-            if (_currentSnipMode == SnipMode.Table && _currentSelection.Width > 20)
+            catch (System.Runtime.InteropServices.SEHException)
             {
-                DetectTableStructure(_currentSelection);
+                // Handle SEH exceptions from unmanaged code
+                System.Diagnostics.Debug.WriteLine("SEH Exception in OnMouseMove - ignoring");
             }
+            catch (Exception ex)
+            {
+                // Log other exceptions but don't crash
+                System.Diagnostics.Debug.WriteLine($"Exception in OnMouseMove: {ex.Message}");
+            }
+        }
 
-            _documentPictureBox.Invalidate();
+        private void SafeInvalidate()
+        {
+            try
+            {
+                if (_documentPictureBox != null && !_documentPictureBox.IsDisposed && _documentPictureBox.IsHandleCreated)
+                {
+                    _documentPictureBox.Invalidate();
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore invalidate errors
+            }
         }
 
         private void OnMouseUp(object sender, MouseEventArgs e)
         {
-            if (_draggingColumnIndex >= 0)
+            try
             {
-                _draggingColumnIndex = -1;
-                _documentPictureBox.Cursor = Cursors.Default;
-                return;
+                // Check if the PictureBox is valid and not disposed
+                if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
+                    return;
+
+                if (_draggingColumnIndex >= 0)
+                {
+                    _draggingColumnIndex = -1;
+                    try
+                    {
+                        _documentPictureBox.Cursor = Cursors.Default;
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore cursor setting errors
+                    }
+                    return;
+                }
+
+                if (!_isSelecting || e.Button != MouseButtons.Left) return;
+
+                _isSelecting = false;
+                
+                if (_currentSelection.Width > 5 && _currentSelection.Height > 5)
+                {
+                    if (_currentSnipMode == SnipMode.Table)
+                    {
+                        _adjustingTable = true;
+                        _showTableGrid = true;
+                        if (_statusLabel != null && !_statusLabel.IsDisposed)
+                            _statusLabel.Text = "Adjust columns then double-click to finish";
+                    }
+                    else
+                    {
+                        ProcessSnip();
+                    }
+                }
             }
-
-            if (!_isSelecting || e.Button != MouseButtons.Left) return;
-
-            _isSelecting = false;
-            
-            if (_currentSelection.Width > 5 && _currentSelection.Height > 5)
+            catch (System.Runtime.InteropServices.SEHException)
             {
-                if (_currentSnipMode == SnipMode.Table)
-                {
-                    _adjustingTable = true;
-                    _showTableGrid = true;
-                    _statusLabel.Text = "Adjust columns then double-click to finish";
-                }
-                else
-                {
-                    ProcessSnip();
-                }
+                // Handle SEH exceptions from unmanaged code
+                System.Diagnostics.Debug.WriteLine("SEH Exception in OnMouseUp - ignoring");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in OnMouseUp: {ex.Message}");
             }
         }
 
