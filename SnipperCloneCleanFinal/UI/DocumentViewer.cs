@@ -16,6 +16,7 @@ namespace SnipperCloneCleanFinal.UI
 {
     public partial class DocumentViewer : Form
     {
+        private const int PDF_RENDER_DPI = 150; // DPI used when rendering PDF pages – keep in sync for accurate coordinate mapping
         private readonly SnipEngine _snippEngine;
         private readonly OCREngine _ocrEngine;
         private Panel _documentsPanel;
@@ -425,80 +426,89 @@ namespace SnipperCloneCleanFinal.UI
             var images = new List<Bitmap>();
             try
             {
-                // Try to explicitly load pdfium.dll
-                try
-                {
-                    // First try to load from same directory as our DLL
-                    var assemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                    var assemblyDir = Path.GetDirectoryName(assemblyLocation);
-                    var pdfiumPath = Path.Combine(assemblyDir, "pdfium.dll");
-                    
-                    if (File.Exists(pdfiumPath))
-                    {
-                        Logger.Info($"Found pdfium.dll at: {pdfiumPath}");
-                        // Try to load it
-                        var handle = LoadLibrary(pdfiumPath);
-                        if (handle == IntPtr.Zero)
-                        {
-                            Logger.Error($"Failed to load pdfium.dll from {pdfiumPath}");
-                        }
-                        else
-                        {
-                            Logger.Info("Successfully loaded pdfium.dll");
-                        }
-                    }
-                    else
-                    {
-                        Logger.Error($"pdfium.dll not found at: {pdfiumPath}");
-                    }
-                }
-                catch (Exception loadEx)
-                {
-                    Logger.Error($"Error loading pdfium.dll: {loadEx.Message}", loadEx);
-                }
-
+                Logger.Info($"Converting PDF to images: {pdfPath}");
+                
                 // Use PdfiumViewer to render real PDF pages into bitmaps
                 using (var document = PdfiumViewer.PdfDocument.Load(pdfPath))
                 {
+                    Logger.Info($"PDF loaded successfully, {document.PageCount} pages");
                     var dpiX = 150; // High quality rendering
                     var dpiY = 150;
+                    
                     for (int pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
                     {
-                        // Calculate size keeping aspect ratio
-                        var size = document.PageSizes[pageIndex];
-                        var width = (int)(size.Width * (dpiX / 72.0));
-                        var height = (int)(size.Height * (dpiY / 72.0));
-                        var rendered = document.Render(pageIndex, width, height, dpiX, dpiY, PdfiumViewer.PdfRenderFlags.Annotations);
-                        images.Add(new Bitmap(rendered));
+                        try
+                        {
+                            // Calculate size keeping aspect ratio
+                            var size = document.PageSizes[pageIndex];
+                            var width = (int)(size.Width * (dpiX / 72.0));
+                            var height = (int)(size.Height * (dpiY / 72.0));
+                            
+                            // Ensure reasonable size limits to prevent memory issues
+                            if (width > 4000) width = 4000;
+                            if (height > 4000) height = 4000;
+                            if (width < 100) width = 100;
+                            if (height < 100) height = 100;
+                            
+                            Logger.Info($"Rendering page {pageIndex + 1} at {width}x{height}");
+                            
+                            using (var rendered = document.Render(pageIndex, width, height, dpiX, dpiY, PdfiumViewer.PdfRenderFlags.Annotations))
+                            {
+                                // Create a copy to avoid disposal issues
+                                var pageBitmap = new Bitmap(rendered);
+                                images.Add(pageBitmap);
+                                Logger.Info($"Successfully rendered page {pageIndex + 1}");
+                            }
+                        }
+                        catch (Exception pageEx)
+                        {
+                            Logger.Error($"Failed to render page {pageIndex + 1}: {pageEx.Message}", pageEx);
+                            // Create an error page for this specific page
+                            var errorPage = CreateErrorPageBitmap($"Failed to render page {pageIndex + 1}");
+                            images.Add(errorPage);
+                        }
                     }
                 }
                 Logger.Info($"Successfully rendered {images.Count} pages from PDF");
             }
             catch (Exception ex)
             {
-                Logger.Error($"Pdfium rendering failed: {ex.Message}", ex);
+                Logger.Error($"PDF rendering failed: {ex.Message}", ex);
                 Logger.Error($"Exception type: {ex.GetType().FullName}");
                 if (ex.InnerException != null)
                 {
                     Logger.Error($"Inner exception: {ex.InnerException.Message}");
                 }
-                // Fallback to older heuristic method
+                
+                // Create a simple error visualization instead of text fallback
+                images.Clear();
+                var errorBitmap = CreateErrorPageBitmap($"PDF Rendering Failed: {ex.Message}");
+                images.Add(errorBitmap);
             }
             
-            if (images.Count == 0)
-            {
-                // If Pdfium failed, try heuristic fallback
-                try
-                {
-                    images.Add(CreateAdvancedPdfRepresentation(pdfPath));
-                }
-                catch { }
-            }
             return images;
         }
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr LoadLibrary(string dllToLoad);
+
+        private Bitmap CreateErrorPageBitmap(string errorMessage)
+        {
+            var bitmap = new Bitmap(800, 600);
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                g.FillRectangle(Brushes.White, 0, 0, 800, 600);
+                g.DrawRectangle(Pens.Red, 10, 10, 780, 580);
+                
+                using (var font = new Font("Arial", 12, FontStyle.Bold))
+                {
+                    var rect = new RectangleF(20, 50, 760, 500);
+                    g.DrawString($"Error: {errorMessage}\n\nPlease check the PDF file and try again.", 
+                                font, Brushes.DarkRed, rect);
+                }
+            }
+            return bitmap;
+        }
 
         private bool TryWindowsPdfRendering(string pdfPath, List<Bitmap> images)
         {
@@ -1139,106 +1149,179 @@ namespace SnipperCloneCleanFinal.UI
                     _statusLabel.Text = "Selection area too small - please draw a larger rectangle";
                     return;
                 }
-                
-                // Crop the selected area from the displayed image
-                using (var croppedImage = CropImageFromDisplayed(displayedImage, _currentSelection))
+
+                // Convert the selection rectangle from zoomed coordinates to original page coordinates
+                System.Drawing.Rectangle selectionOnOriginal = new System.Drawing.Rectangle(
+                    (int)(_currentSelection.X / _zoomFactor),
+                    (int)(_currentSelection.Y / _zoomFactor),
+                    (int)(_currentSelection.Width / _zoomFactor),
+                    (int)(_currentSelection.Height / _zoomFactor)
+                );
+
+                string extractedText = "";
+                string[] extractedNumbers = new string[0];
+                bool success = false;
+
+                // Try PDF text extraction first if this is a PDF
+                if (_currentDocument.Type == DocumentType.PDF)
                 {
-                    if (croppedImage == null)
+                    Logger.Info($"Attempting PDF text extraction for selection: {selectionOnOriginal}");
+                    extractedText = ExtractTextFromPdfRegion(_currentDocument.FilePath, _currentPageIndex, selectionOnOriginal);
+                    if (!string.IsNullOrWhiteSpace(extractedText))
                     {
-                        _statusLabel.Text = "Failed to crop selected area";
-                        return;
-                    }
-                    
-                    // Process with OCR engine
-                    var initResult = _ocrEngine.Initialize();
-
-                    if (!initResult)
-                    {
-                        _statusLabel.Text = "OCR engine failed to initialize";
-                        return;
-                    }
-
-                    var ocrResult = _ocrEngine.RecognizeText(croppedImage);
-                    
-                    // Create result based on snip mode
-                    string extractedValue = "";
-                    if (ocrResult.Success)
-                    {
-                        switch (_currentSnipMode)
+                        success = true;
+                        Logger.Info($"PDF text extraction successful: '{extractedText.Substring(0, Math.Min(extractedText.Length, 50))}...'");
+                        
+                        // Parse numbers from extracted text for Sum mode
+                        if (_currentSnipMode == SnipMode.Sum)
                         {
-                            case SnipMode.Text:
-                                extractedValue = ocrResult.Text;
-                                break;
-                            case SnipMode.Sum:
-                                if (ocrResult.Numbers?.Length > 0)
+                            var numberMatches = System.Text.RegularExpressions.Regex.Matches(extractedText, @"-?\d[\d,\.]*");
+                            extractedNumbers = numberMatches.Cast<System.Text.RegularExpressions.Match>()
+                                .Select(m => m.Value.Replace(",", ""))
+                                .Where(n => decimal.TryParse(n, out _))
+                                .ToArray();
+                        }
+                    }
+                    else
+                    {
+                        Logger.Info("PDF text extraction returned empty - will try OCR fallback");
+                    }
+                }
+
+                // OCR fallback if PDF text extraction failed or if document is an image
+                if (!success)
+                {
+                    Logger.Info("Using OCR fallback for text extraction");
+                    
+                    // Crop from the ORIGINAL page image (not the zoomed displayed image) for better OCR quality
+                    Bitmap pageImage = _currentDocument.Pages[_currentPageIndex];
+                    using (var croppedImage = CropImageFromDisplayed(pageImage, selectionOnOriginal))
+                    {
+                        if (croppedImage == null)
+                        {
+                            _statusLabel.Text = "Failed to crop selected area";
+                            return;
+                        }
+                        
+                        var initResult = _ocrEngine.Initialize();
+                        if (!initResult)
+                        {
+                            _statusLabel.Text = "OCR engine failed to initialize";
+                            return;
+                        }
+
+                        var ocrResult = _ocrEngine.RecognizeText(croppedImage);
+                        if (ocrResult.Success)
+                        {
+                            extractedText = ocrResult.Text;
+                            extractedNumbers = ocrResult.Numbers ?? new string[0];
+                            success = true;
+                            Logger.Info($"OCR extraction successful: '{extractedText.Substring(0, Math.Min(extractedText.Length, 50))}...'");
+                        }
+                        else
+                        {
+                            Logger.Info("OCR extraction failed");
+                        }
+                    }
+                }
+
+                // Process the extracted text based on snip mode
+                string extractedValue = "";
+                if (success)
+                {
+                    switch (_currentSnipMode)
+                    {
+                        case SnipMode.Text:
+                            extractedValue = extractedText.Trim();
+                            break;
+                        case SnipMode.Sum:
+                            if (extractedNumbers.Length > 0)
+                            {
+                                var sum = extractedNumbers
+                                    .Where(n => decimal.TryParse(n.Replace("$", "").Replace(",", ""), out _))
+                                    .Sum(n => decimal.Parse(n.Replace("$", "").Replace(",", "")));
+                                extractedValue = sum.ToString("N2");
+                            }
+                            else
+                            {
+                                // Try to find numbers in the text if extraction didn't parse them
+                                var numberMatches = System.Text.RegularExpressions.Regex.Matches(extractedText, @"-?\d+(?:[,\.]\d+)*");
+                                if (numberMatches.Count > 0)
                                 {
-                                    var sum = ocrResult.Numbers
-                                        .Where(n => decimal.TryParse(n.Replace("$", "").Replace(",", ""), out _))
-                                        .Sum(n => decimal.Parse(n.Replace("$", "").Replace(",", "")));
+                                    var sum = numberMatches.Cast<System.Text.RegularExpressions.Match>()
+                                        .Select(m => m.Value.Replace(",", ""))
+                                        .Where(n => decimal.TryParse(n, out _))
+                                        .Sum(n => decimal.Parse(n));
                                     extractedValue = sum.ToString("N2");
                                 }
                                 else
                                 {
                                     extractedValue = "No numbers found";
+                                    success = false;
                                 }
-                                break;
-                            case SnipMode.Table:
-                                // Extract table data by columns
-                                if (_tableColumns.Count > 0)
-                                {
-                                    var columnData = ExtractTableByColumns(croppedImage, _currentSelection, _tableColumns);
-                                    extractedValue = string.Join("\t", columnData); // Tab-separated for Excel
-                                }
-                                else
-                                {
-                                    extractedValue = ocrResult.Text; // Fallback to regular text
-                                }
-                                break;
-                            case SnipMode.Validation:
-                                extractedValue = "✓ VERIFIED";
-                                break;
-                            case SnipMode.Exception:
-                                extractedValue = "✗ EXCEPTION";
-                                break;
-                            default:
-                                extractedValue = ocrResult.Text;
-                                break;
-                        }
+                            }
+                            break;
+                        case SnipMode.Table:
+                            // For table mode, return tab-separated values
+                            if (_tableColumns.Count > 0)
+                            {
+                                // Table extraction would go here
+                                extractedValue = extractedText.Replace("\n", "\t");
+                            }
+                            else
+                            {
+                                extractedValue = extractedText.Trim();
+                            }
+                            break;
+                        case SnipMode.Validation:
+                            extractedValue = "✓ VERIFIED";
+                            success = true;
+                            break;
+                        case SnipMode.Exception:
+                            extractedValue = "✗ EXCEPTION";
+                            success = true;
+                            break;
+                        default:
+                            extractedValue = extractedText.Trim();
+                            break;
                     }
-                    else
-                    {
-                        extractedValue = "OCR_FAILED";
-                    }
-                    
-                    // Create the event args with real data
-                    var args = new SnipAreaSelectedEventArgs
-                    {
-                        SnipMode = _currentSnipMode,
-                        DocumentPath = _currentDocument.FilePath,
-                        PageNumber = _currentPageIndex + 1,
-                        Bounds = _currentSelection,
-                        SelectedImage = (Bitmap)croppedImage.Clone(),
-                        ExtractedText = extractedValue,
-                        ExtractedNumbers = ocrResult.Success ? ocrResult.Numbers : new string[0],
-                        Success = ocrResult.Success || _currentSnipMode == SnipMode.Validation || _currentSnipMode == SnipMode.Exception
-                    };
+                }
+                else
+                {
+                    extractedValue = _currentSnipMode == SnipMode.Validation ? "✓ VERIFIED" :
+                                   _currentSnipMode == SnipMode.Exception ? "✗ EXCEPTION" : 
+                                   "EXTRACTION_FAILED";
+                    success = _currentSnipMode == SnipMode.Validation || _currentSnipMode == SnipMode.Exception;
+                }
+                
+                // Create the event args with real data
+                var args = new SnipAreaSelectedEventArgs
+                {
+                    SnipMode = _currentSnipMode,
+                    DocumentPath = _currentDocument.FilePath,
+                    PageNumber = _currentPageIndex + 1,
+                    Bounds = selectionOnOriginal, // Use original coordinates for reference
+                    SelectedImage = CropImageFromDisplayed(displayedImage, _currentSelection), // Cropped from display for visual reference
+                    ExtractedText = extractedValue,
+                    ExtractedNumbers = extractedNumbers,
+                    Success = success
+                };
 
-                    // Fire the event to send data to Excel
-                    SnipAreaSelected?.Invoke(this, args);
-                    
-                    // Visual feedback - add permanent highlight
-                    AddPermanentHighlight(_currentSelection, GetSnipColor(_currentSnipMode));
-                    
-                    // Update status
-                    if (args.Success)
-                    {
-                        var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
-                        _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
-                    }
-                    else
-                    {
-                        _statusLabel.Text = $"✗ {_currentSnipMode} snip failed - OCR could not read the area";
-                    }
+                // Fire the event to send data to Excel
+                SnipAreaSelected?.Invoke(this, args);
+                
+                // Visual feedback - add permanent highlight
+                AddPermanentHighlight(_currentSelection, GetSnipColor(_currentSnipMode));
+                
+                // Update status
+                if (args.Success)
+                {
+                    var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
+                    _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
+                }
+                else
+                {
+                    _statusLabel.Text = $"✗ {_currentSnipMode} snip failed - could not extract text from selection";
                 }
                 
                 // Reset selection
@@ -1551,6 +1634,112 @@ namespace SnipperCloneCleanFinal.UI
             return ExtractRealTextFromPdf(pdfBytes);
         }
 
+        // Extract text from a specified rectangle on a PDF page using PDFium's native text extraction
+        private string ExtractTextFromPdfRegion(string pdfPath, int pageIndex, System.Drawing.Rectangle rectOnImage)
+        {
+            IntPtr doc = IntPtr.Zero;
+            IntPtr page = IntPtr.Zero;
+            IntPtr textPage = IntPtr.Zero;
+            try
+            {
+                Logger.Info($"Extracting text from PDF region: page {pageIndex + 1}, rect {rectOnImage}");
+                
+                // Open PDF document (no password assumed)
+                doc = FPDF_LoadDocument(pdfPath, null);
+                if (doc == IntPtr.Zero)
+                {
+                    Logger.Error("Failed to load PDF document for text extraction");
+                    return string.Empty;
+                }
+                
+                // Load the specific page
+                page = FPDF_LoadPage(doc, pageIndex);
+                if (page == IntPtr.Zero)
+                {
+                    Logger.Error($"Failed to load PDF page {pageIndex}");
+                    return string.Empty;
+                }
+                
+                // Load text page (prepare for text extraction)
+                textPage = FPDFText_LoadPage(page);
+                if (textPage == IntPtr.Zero)
+                {
+                    Logger.Error($"Failed to load text page {pageIndex}");
+                    return string.Empty;
+                }
+
+                // Convert the rectangle from image pixel coords to PDF page coordinates (points)
+                // We know the original page image was rendered at 150 DPI (PDF_RENDER_DPI constant)
+                // So 1 PDF point = 1/72 inch. At 150 DPI, 1 inch = 150 px, so 1 point = 150/72 px ≈ 2.0833 px.
+                // Thus scale factor from image pixels to PDF points = (72 / 150).
+                
+                // Get the current page's image to determine scaling
+                if (_currentDocument == null || _currentPageIndex >= _currentDocument.PageCount)
+                {
+                    Logger.Error("No current document or invalid page index");
+                    return string.Empty;
+                }
+                
+                var pageImage = _currentDocument.Pages[pageIndex];
+                double pageHeightPoints = pageImage.Height * (72.0 / PDF_RENDER_DPI);
+                double pageWidthPoints = pageImage.Width * (72.0 / PDF_RENDER_DPI);
+                
+                // Convert rectangle coordinates
+                double left = rectOnImage.X * (72.0 / PDF_RENDER_DPI);
+                double right = (rectOnImage.X + rectOnImage.Width) * (72.0 / PDF_RENDER_DPI);
+                // PDF coordinate origin is bottom-left, whereas image origin is top-left
+                double top = pageHeightPoints - rectOnImage.Y * (72.0 / PDF_RENDER_DPI);
+                double bottom = pageHeightPoints - (rectOnImage.Y + rectOnImage.Height) * (72.0 / PDF_RENDER_DPI);
+                
+                // Ensure bounds are within the page
+                if (left < 0) left = 0;
+                if (bottom < 0) bottom = 0;
+                if (right > pageWidthPoints) right = pageWidthPoints;
+                if (top > pageHeightPoints) top = pageHeightPoints;
+                
+                Logger.Info($"PDF coordinates: left={left:F2}, top={top:F2}, right={right:F2}, bottom={bottom:F2}");
+
+                // Call PDFium to get text in the rectangle (UTF-16LE output)
+                // First call with buffer length 0 to get required characters count
+                int charCount = FPDFText_GetBoundedText(textPage, left, top, right, bottom, null, 0);
+                if (charCount <= 0)
+                {
+                    Logger.Info("No text found in the specified region");
+                    return string.Empty;
+                }
+                
+                // Allocate buffer and get the actual text
+                ushort[] buffer = new ushort[charCount];
+                int actualCount = FPDFText_GetBoundedText(textPage, left, top, right, bottom, buffer, charCount);
+                
+                if (actualCount <= 0)
+                {
+                    Logger.Info("Failed to retrieve text from PDF");
+                    return string.Empty;
+                }
+                
+                // Convert UTF-16LE buffer to .NET string (charCount includes the terminating null)
+                int actualChars = actualCount;
+                if (actualChars > 0 && buffer[actualChars - 1] == 0) 
+                    actualChars -= 1;  // remove terminator if present
+                
+                string text = new string(buffer.Take(actualChars).Select(ch => (char)ch).ToArray());
+                Logger.Info($"Extracted text: '{text}' ({actualChars} characters)");
+                return text;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"FPDFText_GetBoundedText failed: {ex.Message}", ex);
+                return string.Empty;
+            }
+            finally
+            {
+                if (textPage != IntPtr.Zero) FPDFText_ClosePage(textPage);
+                if (page != IntPtr.Zero) FPDF_ClosePage(page);
+                if (doc != IntPtr.Zero) FPDF_CloseDocument(doc);
+            }
+        }
+
         private string[] ExtractTableByColumns(Bitmap sourceImage, System.Drawing.Rectangle tableArea, List<System.Drawing.Rectangle> columnDividers)
         {
             var columnData = new List<string>();
@@ -1600,6 +1789,29 @@ namespace SnipperCloneCleanFinal.UI
             
             return columnData.ToArray();
         }
+
+        // PInvoke declarations for PDFium functions
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", CharSet = System.Runtime.InteropServices.CharSet.Ansi, EntryPoint = "FPDF_LoadDocument")]
+        private static extern IntPtr FPDF_LoadDocument(string filePath, string password);
+        
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDF_CloseDocument")]
+        private static extern void FPDF_CloseDocument(IntPtr document);
+        
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDF_LoadPage")]
+        private static extern IntPtr FPDF_LoadPage(IntPtr document, int pageIndex);
+        
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDF_ClosePage")]
+        private static extern void FPDF_ClosePage(IntPtr page);
+        
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_LoadPage")]
+        private static extern IntPtr FPDFText_LoadPage(IntPtr page);
+        
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_ClosePage")]
+        private static extern void FPDFText_ClosePage(IntPtr textPage);
+        
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_GetBoundedText")]
+        private static extern int FPDFText_GetBoundedText(IntPtr textPage, double left, double top, double right, double bottom,
+                                                          ushort[] buffer, int bufferLen);
     }
 
     public class LoadedDocument : IDisposable
