@@ -1,0 +1,62 @@
+node_modules/
+*.log
+*.pfx
+cert.pem
+key.pem
+.env
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+dist/
+build/
+.vscode/
+.idea/
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio files
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# NuGet Packages
+*.nupkg
+packages/
+*.nuget.props
+*.nuget.targets
+
+# MSI installer files
+*.msi
+*.wixpdb
+*.wixobj
+
+# WebView2 Runtime
+MicrosoftEdgeWebview2Setup.exe
+
+# Office VSTO Runtime
+vstor_redist.exe
+
+# Certificates
+*.pfx
+*.cer
+*.pem
+
+# Local configuration
+*.config.user 

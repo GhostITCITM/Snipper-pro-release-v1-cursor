@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="OnRibbonLoad">
+  <ribbon>
+    <tabs>
+      <tab id="SnipperProTab" label="SNIPPER PRO">
+        <group id="SnipGroup" label="Snips">
+          <button id="TextSnipButton" 
+                  label="Text Snip" 
+                  size="large"
+                  onAction="OnTextSnip"
+                  screentip="Extract text from selected area"
+                  supertip="Use OCR to extract text from the selected area in the document viewer." />
+          
+          <button id="SumSnipButton" 
+                  label="Sum Snip" 
+                  size="large"
+                  onAction="OnSumSnip"
+                  screentip="Sum numbers from selected area"
+                  supertip="Extract and sum numerical values from the selected area." />
+          
+          <button id="TableSnipButton" 
+                  label="Table Snip" 
+                  size="large"
+                  onAction="OnTableSnip"
+                  screentip="Extract table data"
+                  supertip="Extract structured table data from the selected area." />
+          
+          <button id="ValidationSnipButton" 
+                  label="Validation" 
+                  size="large"
+                  onAction="OnValidationSnip"
+                  screentip="Mark as validated"
+                  supertip="Mark the selected cell as validated with a checkmark." />
+          
+          <button id="ExceptionSnipButton" 
+                  label="Exception" 
+                  size="large"
+                  onAction="OnExceptionSnip"
+                  screentip="Mark as exception"
+                  supertip="Mark the selected cell as an exception with an X mark." />
+        </group>
+        
+        <group id="ViewerGroup" label="Document Viewer">
+          <button id="OpenViewerButton" 
+                  label="Open Viewer" 
+                  size="large"
+                  onAction="OnOpenViewer"
+                  screentip="Open document viewer"
+                  supertip="Open the document viewer to load and analyze documents." />
+          
+          <button id="MarkupButton" 
+                  label="Markup" 
+                  size="large"
+                  onAction="OnMarkupSnip"
+                  screentip="Toggle markup mode"
+                  supertip="Enable annotation and markup tools in the document viewer." />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI> 
