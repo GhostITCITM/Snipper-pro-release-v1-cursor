@@ -985,7 +985,7 @@ namespace SnipperCloneCleanFinal.UI
             _documentPictureBox.Invalidate();
         }
 
-        private async void OnMouseUp(object sender, MouseEventArgs e)
+        private void OnMouseUp(object sender, MouseEventArgs e)
         {
             if (_draggingColumnIndex >= 0)
             {
@@ -1008,22 +1008,22 @@ namespace SnipperCloneCleanFinal.UI
                 }
                 else
                 {
-                    await ProcessSnip();
+                    ProcessSnip();
                 }
             }
         }
 
-        private async void OnPictureDoubleClick(object sender, EventArgs e)
+        private void OnPictureDoubleClick(object sender, EventArgs e)
         {
             if (_adjustingTable)
             {
                 _adjustingTable = false;
                 _showTableGrid = false;
-                await ProcessSnip();
+                ProcessSnip();
             }
         }
 
-        private async Task ProcessSnip()
+        private void ProcessSnip()
         {
             try
             {
@@ -1060,7 +1060,7 @@ namespace SnipperCloneCleanFinal.UI
                     }
                     
                     // Process with OCR engine
-                    var initResult = await _ocrEngine.InitializeAsync();
+                    var initResult = _ocrEngine.Initialize();
 
                     if (!initResult)
                     {
@@ -1068,7 +1068,7 @@ namespace SnipperCloneCleanFinal.UI
                         return;
                     }
 
-                    var ocrResult = await _ocrEngine.RecognizeTextAsync(croppedImage);
+                    var ocrResult = _ocrEngine.RecognizeText(croppedImage);
                     
                     // Create result based on snip mode
                     string extractedValue = "";
@@ -1483,7 +1483,7 @@ namespace SnipperCloneCleanFinal.UI
                     {
                         if (columnImage != null)
                         {
-                            var ocrResult = _ocrEngine.RecognizeTextAsync(columnImage).Result;
+                            var ocrResult = _ocrEngine.RecognizeText(columnImage);
                             columnData.Add(ocrResult.Text);
                         }
                     }
@@ -1502,7 +1502,7 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     if (columnImage != null)
                     {
-                        var ocrResult = _ocrEngine.RecognizeTextAsync(columnImage).Result;
+                        var ocrResult = _ocrEngine.RecognizeText(columnImage);
                         columnData.Add(ocrResult.Text);
                     }
                 }

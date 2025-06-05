@@ -44,7 +44,7 @@ namespace SnipperCloneCleanFinal.Core
             CellSelectionChanged?.Invoke(this, new CellSelectionChangedEventArgs(oldAddress, cellAddress));
         }
 
-        public async Task<SnipResult> ProcessSnipAsync(Bitmap imageData, int pageNumber, System.Drawing.Rectangle rectangle)
+        public SnipResult ProcessSnip(Bitmap imageData, int pageNumber, System.Drawing.Rectangle rectangle)
         {
             try
             {
@@ -53,9 +53,9 @@ namespace SnipperCloneCleanFinal.Core
                 switch (_currentMode)
                 {
                     case SnipMode.Text:
-                        return await ProcessTextSnipAsync(imageData);
+                        return ProcessTextSnip(imageData);
                     case SnipMode.Sum:
-                        return await ProcessSumSnipAsync(imageData);
+                        return ProcessSumSnip(imageData);
                     case SnipMode.Exception:
                         return ProcessExceptionSnip();
                     case SnipMode.Validation:
@@ -71,12 +71,12 @@ namespace SnipperCloneCleanFinal.Core
             }
         }
 
-        private async Task<SnipResult> ProcessTextSnipAsync(Bitmap imageData)
+        private SnipResult ProcessTextSnip(Bitmap imageData)
         {
             if (imageData == null)
                 return SnipResult.CreateError("No image data provided");
 
-            var ocrResult = await _ocrEngine.RecognizeTextAsync(imageData);
+            var ocrResult = _ocrEngine.RecognizeText(imageData);
             if (!ocrResult.Success)
                 return SnipResult.CreateError($"OCR failed: {ocrResult.ErrorMessage}");
 
@@ -84,12 +84,12 @@ namespace SnipperCloneCleanFinal.Core
             return SnipResult.CreateSuccess(ocrResult.Text, ocrResult);
         }
 
-        private async Task<SnipResult> ProcessSumSnipAsync(Bitmap imageData)
+        private SnipResult ProcessSumSnip(Bitmap imageData)
         {
             if (imageData == null)
                 return SnipResult.CreateError("No image data provided");
 
-            var ocrResult = await _ocrEngine.RecognizeTextAsync(imageData);
+            var ocrResult = _ocrEngine.RecognizeText(imageData);
             if (!ocrResult.Success)
                 return SnipResult.CreateError($"OCR failed: {ocrResult.ErrorMessage}");
 

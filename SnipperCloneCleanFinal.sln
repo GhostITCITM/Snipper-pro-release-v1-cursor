@@ -6,10 +6,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SnipperCloneCleanFinal", "S
 EndProject
 Global
     GlobalSection(SolutionConfigurationPlatforms) = preSolution
-        Release|x64 = Release|x64
+        Release|AnyCPU = Release|AnyCPU
     EndGlobalSection
     GlobalSection(ProjectConfigurationPlatforms) = postSolution
-        {12345678-1234-1234-1234-123456789ABC}.Release|x64.ActiveCfg = Release|x64
-        {12345678-1234-1234-1234-123456789ABC}.Release|x64.Build.0 = Release|x64
+        {12345678-1234-1234-1234-123456789ABC}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
+        {12345678-1234-1234-1234-123456789ABC}.Release|AnyCPU.Build.0 = Release|AnyCPU
     EndGlobalSection
 EndGlobal

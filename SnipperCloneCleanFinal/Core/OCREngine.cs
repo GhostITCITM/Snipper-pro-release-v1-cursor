@@ -53,12 +53,12 @@ namespace SnipperCloneCleanFinal.Core
             }
         }
 
-        public async Task<bool> InitializeAsync()
+        public bool Initialize()
         {
-            return await Task.FromResult(true);
+            return true;
         }
 
-        public async Task<OCRResult> RecognizeTextAsync(Bitmap image)
+        public OCRResult RecognizeText(Bitmap image)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(OCREngine));
 
@@ -81,7 +81,7 @@ namespace SnipperCloneCleanFinal.Core
                 {
                     string tempInput = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
                     string tempOutputBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-                    image.Save(tempInput, ImageFormat.Png);
+                    image.Save(tempInput, System.Drawing.Imaging.ImageFormat.Png);
 
                     var tesseractPath = Environment.GetEnvironmentVariable("TESSERACT_PATH");
                     if (string.IsNullOrEmpty(tesseractPath))
@@ -99,11 +99,11 @@ namespace SnipperCloneCleanFinal.Core
 
                     using (var proc = Process.Start(psi))
                     {
-                        await proc.WaitForExitAsync();
+                        proc.WaitForExit();
                     }
 
                     string textPath = tempOutputBase + ".txt";
-                    string extractedText = File.Exists(textPath) ? await File.ReadAllTextAsync(textPath) : string.Empty;
+                    string extractedText = File.Exists(textPath) ? File.ReadAllText(textPath) : string.Empty;
 
                     File.Delete(tempInput);
                     if (File.Exists(textPath)) File.Delete(textPath);
