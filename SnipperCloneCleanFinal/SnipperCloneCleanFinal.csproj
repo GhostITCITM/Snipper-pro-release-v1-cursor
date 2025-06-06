@@ -116,6 +116,7 @@
     <Compile Include="Core\MetadataManager.cs" />
     <Compile Include="Core\TableParser.cs" />
     <Compile Include="Core\DictionaryExtensions.cs" />
+    <Compile Include="Core\PdfiumManager.cs" />
     <Compile Include="Infrastructure\Logger.cs" />
     <Compile Include="Infrastructure\AuthManager.cs" />
     <Compile Include="Infrastructure\AppConfig.cs" />
@@ -140,10 +141,15 @@
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   
-  <!-- Copy native PDFium DLL after build -->
+  <!-- Copy native PDFium DLLs after build (both architectures) -->
   <Target Name="CopyNativeDlls" AfterTargets="Build">
+    <!-- Copy x64 version as default -->
     <Copy SourceFiles="..\packages\PdfiumViewer.Native.x86_64.no_v8-no_xfa.2018.4.8.256\Build\x64\pdfium.dll" 
           DestinationFolder="$(OutputPath)" 
+          SkipUnchangedFiles="true" />
+    <!-- Copy x86 version to a subfolder for fallback -->
+    <Copy SourceFiles="..\packages\PdfiumViewer.Native.x86.no_v8-no_xfa.2018.4.8.256\Build\x86\pdfium.dll" 
+          DestinationFiles="$(OutputPath)pdfium_x86.dll" 
           SkipUnchangedFiles="true" />
   </Target>
 </Project> 

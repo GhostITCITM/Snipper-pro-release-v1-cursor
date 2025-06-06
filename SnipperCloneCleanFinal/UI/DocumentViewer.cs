@@ -428,6 +428,16 @@ namespace SnipperCloneCleanFinal.UI
             {
                 Logger.Info($"Converting PDF to images: {pdfPath}");
                 
+                // Ensure PDFium is loaded before attempting to use PdfiumViewer
+                if (!PdfiumManager.IsLoaded)
+                {
+                    Logger.Info("PDFium not loaded, attempting to initialize...");
+                    if (!PdfiumManager.Initialize())
+                    {
+                        throw new InvalidOperationException("PDFium could not be loaded. PDF rendering is not available.");
+                    }
+                }
+                
                 // Use PdfiumViewer to render real PDF pages into bitmaps
                 using (var document = PdfiumViewer.PdfDocument.Load(pdfPath))
                 {
@@ -2293,35 +2303,37 @@ namespace SnipperCloneCleanFinal.UI
         }
         
         // PInvoke declarations for PDFium functions
-        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr LoadLibrary(string dllToLoad);
-        
-        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetDllDirectory(string lpPathName);
         
         static DocumentViewer()
         {
-            // Try to set DLL directory to the current application directory
+            // Initialize PDFium using the comprehensive manager
             try
             {
-                var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                SetDllDirectory(appDir);
+                Logger.Info("Initializing PDFium for DocumentViewer...");
+                bool success = PdfiumManager.Initialize();
                 
-                // Try to preload the PDFium library
-                var pdfiumPath = System.IO.Path.Combine(appDir, "pdfium.dll");
-                if (System.IO.File.Exists(pdfiumPath))
+                if (success)
                 {
-                    LoadLibrary(pdfiumPath);
-                    Logger.Info($"Successfully preloaded pdfium.dll from {pdfiumPath}");
+                    Logger.Info($"PDFium initialized successfully from: {PdfiumManager.GetLoadedPath()}");
+                    
+                    // Test PDFium functions
+                    if (PdfiumManager.TestPdfiumFunctions())
+                    {
+                        Logger.Info("PDFium function test passed - ready for PDF rendering");
+                    }
+                    else
+                    {
+                        Logger.Error("PDFium function test failed - PDF rendering may not work");
+                    }
                 }
                 else
                 {
-                    Logger.Info($"pdfium.dll not found at {pdfiumPath}");
+                    Logger.Error("PDFium initialization failed - PDF rendering will not work");
                 }
             }
             catch (Exception ex)
             {
-                Logger.Error($"Failed to preload pdfium.dll: {ex.Message}", ex);
+                Logger.Error($"Critical error initializing PDFium: {ex.Message}", ex);
             }
         }
         
