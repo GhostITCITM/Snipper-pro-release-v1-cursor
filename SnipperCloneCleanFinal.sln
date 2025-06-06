@@ -5,11 +5,23 @@ MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SnipperCloneCleanFinal", "SnipperCloneCleanFinal\SnipperCloneCleanFinal.csproj", "{12345678-1234-1234-1234-123456789ABC}"
 EndProject
 Global
-    GlobalSection(SolutionConfigurationPlatforms) = preSolution
-        Release|AnyCPU = Release|AnyCPU
-    EndGlobalSection
-    GlobalSection(ProjectConfigurationPlatforms) = postSolution
-        {12345678-1234-1234-1234-123456789ABC}.Release|AnyCPU.ActiveCfg = Release|AnyCPU
-        {12345678-1234-1234-1234-123456789ABC}.Release|AnyCPU.Build.0 = Release|AnyCPU
-    EndGlobalSection
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{12345678-1234-1234-1234-123456789ABC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{12345678-1234-1234-1234-123456789ABC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{12345678-1234-1234-1234-123456789ABC}.Debug|x86.ActiveCfg = Debug|x86
+		{12345678-1234-1234-1234-123456789ABC}.Debug|x86.Build.0 = Debug|x86
+		{12345678-1234-1234-1234-123456789ABC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{12345678-1234-1234-1234-123456789ABC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{12345678-1234-1234-1234-123456789ABC}.Release|x86.ActiveCfg = Release|x86
+		{12345678-1234-1234-1234-123456789ABC}.Release|x86.Build.0 = Release|x86
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
 EndGlobal

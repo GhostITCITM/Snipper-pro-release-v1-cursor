@@ -489,9 +489,6 @@ namespace SnipperCloneCleanFinal.UI
             return images;
         }
 
-        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr LoadLibrary(string dllToLoad);
-
         private Bitmap CreateErrorPageBitmap(string errorMessage)
         {
             var bitmap = new Bitmap(800, 600);
@@ -889,14 +886,24 @@ namespace SnipperCloneCleanFinal.UI
             {
                 _statusLabel.Text = $"{snipMode} Snip mode ACTIVE - Draw a rectangle to extract data";
                 _documentPictureBox.Cursor = Cursors.Cross;
+                
+                // For table mode, give specific instructions
+                if (snipMode == SnipMode.Table)
+                {
+                    _statusLabel.Text = "Table Snip mode ACTIVE - Draw a rectangle around the table, adjust columns, then double-click to extract";
+                }
             }
             else
             {
                 _statusLabel.Text = "Snip mode disabled";
                 _documentPictureBox.Cursor = Cursors.Default;
+                
+                // Clear any table adjustment state
+                _adjustingTable = false;
+                _showTableGrid = false;
+                _tableColumns.Clear();
             }
             
-            _showTableGrid = (snipMode == SnipMode.Table && enabled);
             _documentPictureBox.Invalidate();
         }
 
@@ -910,31 +917,123 @@ namespace SnipperCloneCleanFinal.UI
 
                 if (_adjustingTable)
                 {
-                    if (e.Button == MouseButtons.Left && _currentSelection.Contains(e.Location))
+                    // Handle left-click events - check icons FIRST before selection bounds
+                    if (e.Button == MouseButtons.Left)
                     {
-                        for (int i = 0; i < _tableColumns.Count; i++)
+                        Logger.Info($"Mouse click at ({e.X}, {e.Y}) while adjusting table");
+                        
+                        // Constants must match OnPaint exactly
+                        int iconOffset = 20;
+                        int iconSize = 16;
+                        int centerY = _currentSelection.Y - iconOffset;
+                        
+                        Logger.Info($"Looking for buttons at Y={centerY} with size={iconSize}");
+
+                        // 1. Check if clicking a "–" (minus) button to remove a column divider
+                        // Do this FIRST, before checking selection bounds
+                        for (int i = _tableColumns.Count - 1; i >= 0; i--) // Iterate backwards to avoid index issues
                         {
-                            var hit = _tableColumns[i];
-                            var hitZone = new System.Drawing.Rectangle(hit.X - 5, hit.Y, hit.Width + 10, hit.Height);
-                            if (hitZone.Contains(e.Location))
+                            int centerX = _tableColumns[i].X + _tableColumns[i].Width / 2;
+                            var buttonRect = new System.Drawing.Rectangle(centerX - iconSize/2, centerY - iconSize/2, iconSize, iconSize);
+                            
+                            if (buttonRect.Contains(e.Location))
                             {
-                                _draggingColumnIndex = i;
-                                _dragStartX = e.X;
-                                try
-                                {
-                                    _documentPictureBox.Cursor = Cursors.VSplit;
-                                }
-                                catch (Exception)
-                                {
-                                    // Ignore cursor setting errors
-                                }
-                                return;
+                                Logger.Info($"Removing column divider at index {i}");
+                                _tableColumns.RemoveAt(i);
+                                SafeInvalidate();
+                                return; // Important: return here to prevent further processing
                             }
                         }
-                        return;
+
+                        // 2. Check if clicking a "+" button to add a new column divider
+                        // Do this SECOND, before checking selection bounds
+                        var boundaries = new List<int> { _currentSelection.X };
+                        boundaries.AddRange(_tableColumns.Select(c => c.X + c.Width / 2));
+                        boundaries.Add(_currentSelection.Right);
+                        boundaries.Sort();
+
+                        for (int b = 0; b < boundaries.Count - 1; b++)
+                        {
+                            int gapLeft = boundaries[b];
+                            int gapRight = boundaries[b + 1];
+                            if (gapRight - gapLeft > 40) // Must match OnPaint condition
+                            {
+                                int centerX = gapLeft + (gapRight - gapLeft) / 2;
+                                var buttonRect = new System.Drawing.Rectangle(centerX - iconSize/2, centerY - iconSize/2, iconSize, iconSize);
+                                
+                                if (buttonRect.Contains(e.Location))
+                                {
+                                    Logger.Info($"Adding new column divider at X={centerX}");
+                                    int newRectX = centerX - 2;
+                                    if (newRectX > _currentSelection.X && newRectX < _currentSelection.Right - 4)
+                                    {
+                                        _tableColumns.Add(new System.Drawing.Rectangle(newRectX, _currentSelection.Y, 4, _currentSelection.Height));
+                                        _tableColumns = _tableColumns.OrderBy(c => c.X).ToList();
+                                        SafeInvalidate();
+                                    }
+                                    return; // Important: return here to prevent further processing
+                                }
+                            }
+                        }
+
+                        // 3. NOW check if clicking within selection bounds for divider dragging
+                        if (_currentSelection.Contains(e.Location))
+                        {
+                            Logger.Info("Click is within selection bounds, checking for divider dragging");
+                            
+                            // Check if clicking an existing divider line (to start dragging)
+                            for (int i = 0; i < _tableColumns.Count; i++)
+                            {
+                                var hit = _tableColumns[i];
+                                var hitZone = new System.Drawing.Rectangle(hit.X - 5, hit.Y, hit.Width + 10, hit.Height);
+                                if (hitZone.Contains(e.Location))
+                                {
+                                    Logger.Info($"Starting drag for column {i}");
+                                    _draggingColumnIndex = i;
+                                    _dragStartX = e.X;
+                                    try
+                                    {
+                                        _documentPictureBox.Cursor = Cursors.VSplit;
+                                    }
+                                    catch (Exception)
+                                    {
+                                        // Ignore cursor setting errors
+                                    }
+                                    return;
+                                }
+                            }
+                            
+                            // If clicking inside selection but not on icons or dividers, just stay in adjust mode
+                            Logger.Info("Click inside selection but not on any interactive element - staying in adjust mode");
+                            return;
+                        }
+                        
+                        // 4. ONLY exit adjust mode if clicking far outside the selection AND button areas
+                        // Expand the bounds to include button area
+                        var expandedBounds = new System.Drawing.Rectangle(
+                            _currentSelection.X - 20, 
+                            _currentSelection.Y - iconOffset - iconSize - 5, 
+                            _currentSelection.Width + 40, 
+                            _currentSelection.Height + iconOffset + iconSize + 10);
+                            
+                        if (!expandedBounds.Contains(e.Location))
+                        {
+                            Logger.Info("Click outside expanded bounds - exiting table adjust mode");
+                            _adjustingTable = false;
+                            _tableColumns.Clear();
+                            _showTableGrid = false;
+                            SafeInvalidate();
+                        }
+                        else
+                        {
+                            Logger.Info("Click within expanded bounds but not on interactive elements - staying in adjust mode");
+                        }
                     }
+                    
+                    // Handle right-click for backward compatibility
                     if (e.Button == MouseButtons.Right && _currentSelection.Contains(e.Location))
                     {
+                        // Keep right-click functionality for backward compatibility
                         for (int i = 0; i < _tableColumns.Count; i++)
                         {
                             if (_tableColumns[i].Contains(e.Location))
@@ -952,12 +1051,6 @@ namespace SnipperCloneCleanFinal.UI
                             SafeInvalidate();
                         }
                         return;
-                    }
-                    if (! _currentSelection.Contains(e.Location))
-                    {
-                        _adjustingTable = false;
-                        _tableColumns.Clear();
-                        _showTableGrid = false;
                     }
                 }
 
@@ -1005,15 +1098,72 @@ namespace SnipperCloneCleanFinal.UI
                 if (_adjustingTable)
                 {
                     bool overLine = false;
+                    bool overIcon = false;
+                    
+                    // Check if over an existing divider line (for dragging)
                     foreach (var col in _tableColumns)
                     {
                         var zone = new System.Drawing.Rectangle(col.X - 5, col.Y, col.Width + 10, col.Height);
-                        if (zone.Contains(e.Location)) { overLine = true; break; }
+                        if (zone.Contains(e.Location)) 
+                        { 
+                            overLine = true; 
+                            break; 
+                        }
+                    }
+                    
+                    // Check if over plus/minus buttons (for add/remove actions)
+                    if (!overLine)
+                    {
+                        int iconOffset = 20;
+                        int iconSize = 16;
+                        int centerY = _currentSelection.Y - iconOffset;
+                        
+                        // Check minus buttons
+                        foreach (var col in _tableColumns)
+                        {
+                            int centerX = col.X + col.Width / 2;
+                            var buttonRect = new System.Drawing.Rectangle(centerX - iconSize/2, centerY - iconSize/2, iconSize, iconSize);
+                            if (buttonRect.Contains(e.Location))
+                            {
+                                overIcon = true;
+                                break;
+                            }
+                        }
+                        
+                        // Check plus buttons if not over minus button
+                        if (!overIcon)
+                        {
+                            var boundaries = new List<int> { _currentSelection.X };
+                            boundaries.AddRange(_tableColumns.Select(c => c.X + c.Width / 2));
+                            boundaries.Add(_currentSelection.Right);
+                            boundaries.Sort();
+                            
+                            for (int b = 0; b < boundaries.Count - 1; b++)
+                            {
+                                int gapLeft = boundaries[b];
+                                int gapRight = boundaries[b + 1];
+                                if (gapRight - gapLeft > 40)
+                                {
+                                    int centerX = gapLeft + (gapRight - gapLeft) / 2;
+                                    var buttonRect = new System.Drawing.Rectangle(centerX - iconSize/2, centerY - iconSize/2, iconSize, iconSize);
+                                    if (buttonRect.Contains(e.Location))
+                                    {
+                                        overIcon = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                     
                     try
                     {
-                        _documentPictureBox.Cursor = overLine ? Cursors.VSplit : Cursors.Default;
+                        if (overLine)
+                            _documentPictureBox.Cursor = Cursors.VSplit;
+                        else if (overIcon)
+                            _documentPictureBox.Cursor = Cursors.Hand;
+                        else
+                            _documentPictureBox.Cursor = Cursors.Default;
                     }
                     catch (Exception)
                     {
@@ -1093,8 +1243,19 @@ namespace SnipperCloneCleanFinal.UI
                     {
                         _adjustingTable = true;
                         _showTableGrid = true;
+                        
+                        // Ensure we have at least one column divider to start with
+                        if (_tableColumns.Count == 0)
+                        {
+                            int centerX = _currentSelection.X + _currentSelection.Width / 2;
+                            _tableColumns.Add(new System.Drawing.Rectangle(centerX - 2, _currentSelection.Y, 4, _currentSelection.Height));
+                            Logger.Info($"Added initial column divider at X={centerX}");
+                        }
+                        
                         if (_statusLabel != null && !_statusLabel.IsDisposed)
-                            _statusLabel.Text = "Adjust columns then double-click to finish";
+                            _statusLabel.Text = $"Table mode: {_tableColumns.Count} column dividers. Click + to add, - to remove, or double-click to extract";
+                        
+                        SafeInvalidate();
                     }
                     else
                     {
@@ -1262,15 +1423,47 @@ namespace SnipperCloneCleanFinal.UI
                             }
                             break;
                         case SnipMode.Table:
-                            // For table mode, return tab-separated values
+                            // DataSnipper approach: Extract text from each column separately for better accuracy
                             if (_tableColumns.Count > 0)
                             {
-                                // Table extraction would go here
-                                extractedValue = extractedText.Replace("\n", "\t");
+                                // Scale the column dividers to match the original page coordinates
+                                var scaledTableColumns = new List<System.Drawing.Rectangle>();
+                                foreach (var col in _tableColumns)
+                                {
+                                    var scaledCol = new System.Drawing.Rectangle(
+                                        (int)(col.X / _zoomFactor),
+                                        (int)(col.Y / _zoomFactor),
+                                        (int)(col.Width / _zoomFactor),
+                                        (int)(col.Height / _zoomFactor)
+                                    );
+                                    scaledTableColumns.Add(scaledCol);
+                                }
+                                
+                                extractedValue = ExtractTableDataByColumns(_currentDocument, _currentPageIndex, selectionOnOriginal, scaledTableColumns);
+                                success = !string.IsNullOrWhiteSpace(extractedValue);
+                                Logger.Info($"Table extraction by columns: {(success ? "SUCCESS" : "FAILED")}");
+                                if (success)
+                                {
+                                    Logger.Info($"Table output preview: '{extractedValue.Substring(0, Math.Min(extractedValue.Length, 100))}...'");
+                                    Logger.Info($"Total table output length: {extractedValue.Length} characters");
+                                    var lines = extractedValue.Split('\n');
+                                    Logger.Info($"Table has {lines.Length} rows");
+                                    if (lines.Length > 0)
+                                    {
+                                        var firstRowColumns = lines[0].Split('\t');
+                                        Logger.Info($"First row has {firstRowColumns.Length} columns: [{string.Join(", ", firstRowColumns.Take(5))}]");
+                                    }
+                                }
+                                else
+                                {
+                                    Logger.Info("Table extraction failed - no data extracted");
+                                }
                             }
                             else
                             {
+                                // No column dividers - treat as single column table
                                 extractedValue = extractedText.Trim();
+                                success = !string.IsNullOrWhiteSpace(extractedValue);
                             }
                             break;
                         case SnipMode.Validation:
@@ -1313,19 +1506,31 @@ namespace SnipperCloneCleanFinal.UI
                 // Visual feedback - add permanent highlight
                 AddPermanentHighlight(_currentSelection, GetSnipColor(_currentSnipMode));
                 
-                // Update status
+                // Update status with more specific feedback
                 if (args.Success)
                 {
-                    var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
-                    _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
+                    if (_currentSnipMode == SnipMode.Table)
+                    {
+                        var lines = extractedValue.Split('\n');
+                        var columns = lines.Length > 0 ? lines[0].Split('\t').Length : 0;
+                        _statusLabel.Text = $"✓ Table snip completed: {lines.Length} rows × {columns} columns extracted to Excel";
+                    }
+                    else
+                    {
+                        var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
+                        _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
+                    }
                 }
                 else
                 {
                     _statusLabel.Text = $"✗ {_currentSnipMode} snip failed - could not extract text from selection";
                 }
                 
-                // Reset selection
+                // Reset selection and table state
                 _currentSelection = System.Drawing.Rectangle.Empty;
+                _adjustingTable = false;
+                _showTableGrid = false;
+                _tableColumns.Clear();
                 _documentPictureBox.Invalidate();
             }
             catch (Exception ex)
@@ -1397,21 +1602,21 @@ namespace SnipperCloneCleanFinal.UI
             _tableColumns.Clear();
             _tableRows.Clear();
             
-            if (selection.Width < 20 || selection.Height < 20)
+            if (selection.Width < 50 || selection.Height < 20)
                 return;
             
-            // Create 4 initial column dividers evenly spaced
-            int columnCount = 4;
-            int columnWidth = selection.Width / (columnCount + 1);
+            // Start with 2 initial column dividers for a 3-column table (more practical than 4)
+            int initialColumns = 3;
+            int spacing = selection.Width / initialColumns;
             
-            for (int i = 1; i <= columnCount; i++)
+            for (int i = 1; i < initialColumns; i++)
             {
-                int x = selection.X + (i * columnWidth);
+                int x = selection.X + (i * spacing);
                 _tableColumns.Add(new System.Drawing.Rectangle(x - 2, selection.Y, 4, selection.Height));
             }
             
-            // Don't show row dividers - tables are typically column-based
             _showTableGrid = true;
+            Logger.Info($"Created initial table structure with {_tableColumns.Count} column dividers");
         }
 
         private void OnPaint(object sender, PaintEventArgs e)
@@ -1432,14 +1637,84 @@ namespace SnipperCloneCleanFinal.UI
                 }
             }
             
-            // Draw table grid helpers
-            if (_showTableGrid && _currentSnipMode == SnipMode.Table)
+            // Draw table grid helpers with DataSnipper-style controls
+            if (_showTableGrid && _currentSnipMode == SnipMode.Table && !_currentSelection.IsEmpty)
             {
-                using (var pen = new Pen(Color.DarkBlue, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                // Draw column divider lines
+                using (var pen = new Pen(Color.Blue, 2))
                 {
                     foreach (var column in _tableColumns)
                     {
-                        e.Graphics.DrawLine(pen, column.X + column.Width / 2, column.Y, column.X + column.Width / 2, column.Y + column.Height);
+                        int centerX = column.X + column.Width / 2;
+                        e.Graphics.DrawLine(pen, centerX, column.Y, centerX, column.Y + column.Height);
+                    }
+                }
+
+                // Draw plus/minus icons for DataSnipper-style column adjustment
+                if (_adjustingTable)
+                {
+                    int iconOffset = 20;
+                    int iconSize = 16;
+                    int centerY = _currentSelection.Y - iconOffset;
+                    
+                    using (var iconPen = new Pen(Color.DarkBlue, 2))
+                    using (var bgBrush = new SolidBrush(Color.LightYellow))
+                    using (var borderPen = new Pen(Color.DarkBlue, 1))
+                    using (var textBrush = new SolidBrush(Color.DarkBlue))
+                    using (var font = new Font("Arial", 10, FontStyle.Bold))
+                    {
+                        // Draw "–" (minus) button for each existing column divider
+                        foreach (var col in _tableColumns)
+                        {
+                            int centerX = col.X + col.Width / 2;
+                            var buttonRect = new System.Drawing.Rectangle(centerX - iconSize/2, centerY - iconSize/2, iconSize, iconSize);
+                            
+                            // Draw button background
+                            e.Graphics.FillRectangle(bgBrush, buttonRect);
+                            e.Graphics.DrawRectangle(borderPen, buttonRect);
+                            
+                            // Draw minus sign
+                            var minusRect = new RectangleF(buttonRect.X + 2, buttonRect.Y + iconSize/2 - 1, buttonRect.Width - 4, 2);
+                            e.Graphics.FillRectangle(textBrush, minusRect);
+                        }
+                        
+                        // Draw "+" button for each gap between column dividers
+                        var boundaries = new List<int> { _currentSelection.X };
+                        boundaries.AddRange(_tableColumns.Select(c => c.X + c.Width / 2));
+                        boundaries.Add(_currentSelection.Right);
+                        boundaries.Sort();
+                        
+                        for (int i = 0; i < boundaries.Count - 1; i++)
+                        {
+                            int gapLeft = boundaries[i];
+                            int gapRight = boundaries[i + 1];
+                            if (gapRight - gapLeft > 40) // Only show + button if gap is wide enough
+                            {
+                                int centerX = gapLeft + (gapRight - gapLeft) / 2;
+                                var buttonRect = new System.Drawing.Rectangle(centerX - iconSize/2, centerY - iconSize/2, iconSize, iconSize);
+                                
+                                // Draw button background
+                                e.Graphics.FillRectangle(bgBrush, buttonRect);
+                                e.Graphics.DrawRectangle(borderPen, buttonRect);
+                                
+                                // Draw plus sign
+                                var hLineRect = new RectangleF(buttonRect.X + 2, buttonRect.Y + iconSize/2 - 1, buttonRect.Width - 4, 2);
+                                var vLineRect = new RectangleF(buttonRect.X + iconSize/2 - 1, buttonRect.Y + 2, 2, buttonRect.Height - 4);
+                                e.Graphics.FillRectangle(textBrush, hLineRect);
+                                e.Graphics.FillRectangle(textBrush, vLineRect);
+                            }
+                        }
+                        
+                        // Draw instruction text
+                        string instruction = "Click + to add columns, - to remove columns, or double-click to extract table";
+                        var textRect = new RectangleF(_currentSelection.X, _currentSelection.Bottom + 5, _currentSelection.Width, 30);
+                        using (var instructionFont = new Font("Arial", 9))
+                        using (var textBgBrush = new SolidBrush(Color.FromArgb(200, Color.White)))
+                        {
+                            e.Graphics.FillRectangle(textBgBrush, textRect);
+                            e.Graphics.DrawString(instruction, instructionFont, textBrush, textRect, 
+                                new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+                        }
                     }
                 }
             }
@@ -1740,57 +2015,316 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
 
-        private string[] ExtractTableByColumns(Bitmap sourceImage, System.Drawing.Rectangle tableArea, List<System.Drawing.Rectangle> columnDividers)
+        // Extract table data by extracting text from each column separately (DataSnipper approach)
+        private string ExtractTableDataByColumns(LoadedDocument document, int pageIndex, System.Drawing.Rectangle tableArea, List<System.Drawing.Rectangle> columnDividers)
         {
-            var columnData = new List<string>();
-            var sortedDividers = columnDividers.OrderBy(c => c.X).ToList();
-            
-            // Extract data between dividers
-            int startX = tableArea.X;
-            
-            foreach (var divider in sortedDividers)
+            try
             {
-                // Extract column between startX and divider
-                var columnWidth = divider.X - startX;
-                if (columnWidth > 10)
+                var sortedDividers = columnDividers.OrderBy(c => c.X).ToList();
+                var columnTexts = new List<List<string>>();
+                
+                // Define column boundaries (left edge, divider positions, right edge)
+                var columnBoundaries = new List<int> { tableArea.X };
+                columnBoundaries.AddRange(sortedDividers.Select(d => d.X + d.Width / 2));
+                columnBoundaries.Add(tableArea.Right);
+                
+                // Ensure boundaries are within table bounds and sorted
+                columnBoundaries = columnBoundaries
+                    .Where(x => x >= tableArea.X && x <= tableArea.Right)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToList();
+                
+                Logger.Info($"Extracting table with {columnBoundaries.Count - 1} columns");
+                
+                // Extract text from each column
+                for (int col = 0; col < columnBoundaries.Count - 1; col++)
                 {
-                    var columnRect = new System.Drawing.Rectangle(
-                        startX - tableArea.X, 0, 
-                        columnWidth, sourceImage.Height);
+                    var columnLeft = columnBoundaries[col];
+                    var columnRight = columnBoundaries[col + 1];
+                    var columnWidth = columnRight - columnLeft;
                     
-                    using (var columnImage = CropImageFromDisplayed(sourceImage, columnRect))
+                    if (columnWidth > 5) // Minimum column width
                     {
-                        if (columnImage != null)
+                        var columnRect = new System.Drawing.Rectangle(
+                            columnLeft, tableArea.Y, columnWidth, tableArea.Height);
+                        
+                        string columnText = "";
+                        
+                        // Try PDF text extraction first
+                        if (document.Type == DocumentType.PDF)
                         {
-                            var ocrResult = _ocrEngine.RecognizeText(columnImage);
-                            columnData.Add(ocrResult.Text);
+                            columnText = ExtractTextFromPdfRegion(document.FilePath, pageIndex, columnRect);
+                        }
+                        
+                        // OCR fallback if PDF extraction failed
+                        if (string.IsNullOrWhiteSpace(columnText))
+                        {
+                            var pageImage = document.Pages[pageIndex];
+                            using (var columnImage = CropImageFromDisplayed(pageImage, columnRect))
+                            {
+                                if (columnImage != null && _ocrEngine.Initialize())
+                                {
+                                    var ocrResult = _ocrEngine.RecognizeText(columnImage);
+                                    if (ocrResult.Success)
+                                    {
+                                        columnText = ocrResult.Text;
+                                        Logger.Info($"Column {col + 1}: OCR fallback used, extracted '{columnText.Substring(0, Math.Min(columnText.Length, 50))}...'");
+                                    }
+                                    else
+                                    {
+                                        Logger.Info($"Column {col + 1}: Both PDF extraction and OCR failed");
+                                    }
+                                }
+                                else
+                                {
+                                    Logger.Info($"Column {col + 1}: Could not initialize OCR engine");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Logger.Info($"Column {col + 1}: PDF extraction successful, extracted '{columnText.Substring(0, Math.Min(columnText.Length, 50))}...'");
+                        }
+                        
+                        // Split column text into lines and clean up
+                        var columnLines = columnText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                                                    .Select(line => line.Trim())
+                                                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                                                    .ToList();
+                        
+                        columnTexts.Add(columnLines);
+                        Logger.Info($"Column {col + 1}: {columnLines.Count} lines extracted");
+                    }
+                    else
+                    {
+                        columnTexts.Add(new List<string>());
+                    }
+                }
+                
+                // Combine columns into tab-delimited rows
+                if (columnTexts.Count > 0)
+                {
+                    var result = CombineColumnsIntoTabDelimitedRows(columnTexts);
+                    if (!string.IsNullOrWhiteSpace(result))
+                    {
+                        return result;
+                    }
+                    else
+                    {
+                        Logger.Info("Column-based extraction produced empty result, falling back to full area extraction");
+                    }
+                }
+                
+                // Fallback: extract entire table area as one piece and try to format it
+                Logger.Info("Falling back to full table area extraction");
+                string fallbackText = "";
+                
+                if (document.Type == DocumentType.PDF)
+                {
+                    fallbackText = ExtractTextFromPdfRegion(document.FilePath, pageIndex, tableArea);
+                }
+                
+                if (string.IsNullOrWhiteSpace(fallbackText))
+                {
+                    // OCR fallback for entire table
+                    var pageImage = document.Pages[pageIndex];
+                    using (var tableImage = CropImageFromDisplayed(pageImage, tableArea))
+                    {
+                        if (tableImage != null && _ocrEngine.Initialize())
+                        {
+                            var ocrResult = _ocrEngine.RecognizeText(tableImage);
+                            if (ocrResult.Success)
+                            {
+                                fallbackText = ocrResult.Text;
+                            }
                         }
                     }
                 }
-                startX = divider.X + divider.Width;
-            }
-            
-            // Get last column after last divider
-            if (startX < tableArea.Right)
-            {
-                var lastColumnRect = new System.Drawing.Rectangle(
-                    startX - tableArea.X, 0,
-                    tableArea.Right - startX, sourceImage.Height);
                 
-                using (var columnImage = CropImageFromDisplayed(sourceImage, lastColumnRect))
+                if (!string.IsNullOrWhiteSpace(fallbackText))
                 {
-                    if (columnImage != null)
+                    // Try to format the fallback text with approximate column positions
+                    return FormatTextWithColumnDividers(fallbackText, columnDividers, tableArea);
+                }
+                
+                return "";
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error extracting table by columns: {ex.Message}", ex);
+                return "";
+            }
+        }
+        
+        // Combine multiple column text lists into tab-delimited rows for Excel
+        private string CombineColumnsIntoTabDelimitedRows(List<List<string>> columnTexts)
+        {
+            try
+            {
+                if (columnTexts.Count == 0) return "";
+                
+                // Find the maximum number of lines in any column
+                int maxLines = columnTexts.Max(col => col.Count);
+                var resultRows = new List<string>();
+                
+                for (int row = 0; row < maxLines; row++)
+                {
+                    var rowCells = new List<string>();
+                    
+                    foreach (var columnLines in columnTexts)
                     {
-                        var ocrResult = _ocrEngine.RecognizeText(columnImage);
-                        columnData.Add(ocrResult.Text);
+                        // Get the text for this row from this column (or empty if column has fewer lines)
+                        string cellText = row < columnLines.Count ? columnLines[row] : "";
+                        rowCells.Add(cellText);
                     }
+                    
+                    // Join cells with tabs for Excel compatibility
+                    string tabDelimitedRow = string.Join("\t", rowCells);
+                    
+                    // Only add non-empty rows (but allow rows with at least one non-empty cell)
+                    if (rowCells.Any(cell => !string.IsNullOrWhiteSpace(cell)))
+                    {
+                        resultRows.Add(tabDelimitedRow);
+                    }
+                }
+                
+                string result = string.Join("\n", resultRows);
+                Logger.Info($"Created tab-delimited table with {resultRows.Count} rows and {columnTexts.Count} columns");
+                if (result.Length > 0)
+                {
+                    Logger.Info($"Sample output: '{result.Substring(0, Math.Min(result.Length, 100))}...'");
+                    Logger.Info($"Contains tabs: {result.Contains('\t')}");
+                    var sampleLines = result.Split('\n').Take(3);
+                    foreach (var line in sampleLines)
+                    {
+                        var cells = line.Split('\t');
+                        Logger.Info($"Row with {cells.Length} cells: [{string.Join("] [", cells)}]");
+                    }
+                }
+                else
+                {
+                    Logger.Info("No result generated from column combination");
+                }
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error combining columns into rows: {ex.Message}", ex);
+                return "";
+            }
+                }
+        
+        // Format text using column divider positions as guidelines
+        private string FormatTextWithColumnDividers(string text, List<System.Drawing.Rectangle> columnDividers, System.Drawing.Rectangle tableArea)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(text) || columnDividers.Count == 0)
+                    return text;
+                
+                var lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                var formattedLines = new List<string>();
+                
+                // Calculate column boundaries as relative positions (0.0 to 1.0)
+                var columnPositions = new List<double>();
+                foreach (var divider in columnDividers.OrderBy(d => d.X))
+                {
+                    double relativePos = (double)(divider.X - tableArea.X) / tableArea.Width;
+                    columnPositions.Add(relativePos);
+                }
+                
+                Logger.Info($"Formatting text with {columnPositions.Count} column positions: [{string.Join(", ", columnPositions.Select(p => p.ToString("F2")))}]");
+                
+                foreach (var line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+                    
+                    // Try intelligent column splitting based on divider positions
+                    var columns = SplitLineByColumnPositions(line.Trim(), columnPositions);
+                    var tabLine = string.Join("\t", columns);
+                    formattedLines.Add(tabLine);
+                }
+                
+                return string.Join("\n", formattedLines);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error formatting text with column dividers: {ex.Message}", ex);
+                return text; // Return original text if formatting fails
+            }
+        }
+        
+        // Split a line into columns based on relative positions
+        private string[] SplitLineByColumnPositions(string line, List<double> columnPositions)
+        {
+            var result = new List<string>();
+            int lastPos = 0;
+            
+            foreach (var position in columnPositions)
+            {
+                int charPos = (int)(position * line.Length);
+                charPos = Math.Min(charPos, line.Length);
+                charPos = Math.Max(charPos, lastPos);
+                
+                // Find the best split point near this position (look for spaces)
+                int splitPos = FindBestSplitPoint(line, charPos, lastPos);
+                
+                if (splitPos > lastPos)
+                {
+                    result.Add(line.Substring(lastPos, splitPos - lastPos).Trim());
+                    lastPos = splitPos;
                 }
             }
             
-            return columnData.ToArray();
+            // Add the remaining part
+            if (lastPos < line.Length)
+            {
+                result.Add(line.Substring(lastPos).Trim());
+            }
+            
+            // Ensure we have at least one column
+            if (result.Count == 0)
+                result.Add(line);
+            
+            return result.ToArray();
         }
-
+        
         // PInvoke declarations for PDFium functions
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr LoadLibrary(string dllToLoad);
+        
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
+        
+        static DocumentViewer()
+        {
+            // Try to set DLL directory to the current application directory
+            try
+            {
+                var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                SetDllDirectory(appDir);
+                
+                // Try to preload the PDFium library
+                var pdfiumPath = System.IO.Path.Combine(appDir, "pdfium.dll");
+                if (System.IO.File.Exists(pdfiumPath))
+                {
+                    LoadLibrary(pdfiumPath);
+                    Logger.Info($"Successfully preloaded pdfium.dll from {pdfiumPath}");
+                }
+                else
+                {
+                    Logger.Info($"pdfium.dll not found at {pdfiumPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to preload pdfium.dll: {ex.Message}", ex);
+            }
+        }
+        
         [System.Runtime.InteropServices.DllImport("pdfium.dll", CharSet = System.Runtime.InteropServices.CharSet.Ansi, EntryPoint = "FPDF_LoadDocument")]
         private static extern IntPtr FPDF_LoadDocument(string filePath, string password);
         
@@ -1812,6 +2346,260 @@ namespace SnipperCloneCleanFinal.UI
         [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_GetBoundedText")]
         private static extern int FPDFText_GetBoundedText(IntPtr textPage, double left, double top, double right, double bottom,
                                                           ushort[] buffer, int bufferLen);
+
+        private string[] SplitLineIntoColumns(string line, int targetColumns)
+        {
+            if (string.IsNullOrWhiteSpace(line) || targetColumns <= 1)
+                return new[] { line };
+
+            try
+            {
+                // Try different splitting strategies in order of preference
+                
+                // Strategy 1: Split on 3+ spaces (wide gaps) 
+                var wideGaps = System.Text.RegularExpressions.Regex.Split(line, @"\s{3,}");
+                if (wideGaps.Length == targetColumns)
+                {
+                    return wideGaps.Select(s => s.Trim()).ToArray();
+                }
+                
+                // Strategy 2: Split on 2+ spaces
+                var mediumGaps = System.Text.RegularExpressions.Regex.Split(line, @"\s{2,}");
+                if (mediumGaps.Length == targetColumns)
+                {
+                    return mediumGaps.Select(s => s.Trim()).ToArray();
+                }
+                
+                // Strategy 3: Intelligent splitting based on patterns (numbers, currency, etc.)
+                // This handles cases like "Name Surname  Province  R123,456.00"
+                var intelligentSplit = IntelligentColumnSplit(line, targetColumns);
+                if (intelligentSplit.Length == targetColumns)
+                {
+                    return intelligentSplit;
+                }
+                
+                // Strategy 4: Force split by word boundaries and group into targetColumns
+                var words = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (words.Length >= targetColumns)
+                {
+                    var result = new string[targetColumns];
+                    int wordsPerColumn = Math.Max(1, words.Length / targetColumns);
+                    int extraWords = words.Length % targetColumns;
+                    int wordIndex = 0;
+                    
+                    for (int col = 0; col < targetColumns; col++)
+                    {
+                        var takeCount = wordsPerColumn + (col < extraWords ? 1 : 0);
+                        if (col == targetColumns - 1) // Last column gets all remaining words
+                        {
+                            takeCount = words.Length - wordIndex;
+                        }
+                        
+                        result[col] = string.Join(" ", words.Skip(wordIndex).Take(takeCount));
+                        wordIndex += takeCount;
+                    }
+                    return result;
+                }
+                
+                // Fallback: Just put everything in first column
+                var fallback = new string[targetColumns];
+                fallback[0] = line;
+                for (int i = 1; i < targetColumns; i++)
+                {
+                    fallback[i] = "";
+                }
+                return fallback;
+            }
+            catch
+            {
+                // Emergency fallback
+                var emergency = new string[targetColumns];
+                emergency[0] = line;
+                for (int i = 1; i < targetColumns; i++)
+                {
+                    emergency[i] = "";
+                }
+                return emergency;
+            }
+        }
+
+        private string[] IntelligentColumnSplit(string line, int targetColumns)
+        {
+            try
+            {
+                // Look for common patterns: amounts (R123,456.00), percentages, dates, etc.
+                var patterns = new[]
+                {
+                    @"R\s*\d+[\d\s,\.]*",  // Currency amounts like "R123,456.00"
+                    @"\d+[\d\s,\.]*%",     // Percentages
+                    @"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", // Dates
+                    @"\d+[\d\s,\.]+",      // Large numbers
+                    @"[A-Z][a-z]+\s+[A-Z][a-z]+", // Names like "First Last"
+                };
+                
+                var segments = new List<string>();
+                var remaining = line;
+                
+                foreach (var pattern in patterns)
+                {
+                    var matches = System.Text.RegularExpressions.Regex.Matches(remaining, pattern);
+                    foreach (System.Text.RegularExpressions.Match match in matches)
+                    {
+                        if (match.Success)
+                        {
+                            // Extract the part before the match
+                            var before = remaining.Substring(0, match.Index).Trim();
+                            if (!string.IsNullOrEmpty(before))
+                            {
+                                segments.Add(before);
+                            }
+                            
+                            // Extract the match itself
+                            segments.Add(match.Value.Trim());
+                            
+                            // Update remaining text
+                            remaining = remaining.Substring(match.Index + match.Length).Trim();
+                            break; // Process one match at a time
+                        }
+                    }
+                    
+                    if (segments.Count >= targetColumns)
+                        break;
+                }
+                
+                // Add any remaining text
+                if (!string.IsNullOrEmpty(remaining))
+                {
+                    segments.Add(remaining);
+                }
+                
+                // Adjust to target column count
+                if (segments.Count == targetColumns)
+                {
+                    return segments.ToArray();
+                }
+                else if (segments.Count > targetColumns)
+                {
+                    // Combine excess segments into last column
+                    var result = segments.Take(targetColumns - 1).ToList();
+                    result.Add(string.Join(" ", segments.Skip(targetColumns - 1)));
+                    return result.ToArray();
+                }
+                else
+                {
+                    // Pad with empty strings
+                    while (segments.Count < targetColumns)
+                    {
+                        segments.Add("");
+                    }
+                    return segments.ToArray();
+                }
+            }
+            catch
+            {
+                // If intelligent parsing fails, fall back to simple space splitting
+                return line.Split(new[] { ' ' }, targetColumns, StringSplitOptions.None);
+            }
+        }
+
+        private string FormatLineWithTabs(string line, List<double> columnPositions)
+        {
+            if (string.IsNullOrWhiteSpace(line) || columnPositions.Count == 0)
+                return line;
+
+            try
+            {
+                // Remove extra whitespace and normalize
+                line = System.Text.RegularExpressions.Regex.Replace(line.Trim(), @"\s+", " ");
+                
+                // If line is too short, just return it
+                if (line.Length < 10)
+                    return line;
+                
+                // Split on multiple spaces (likely column separators) and significant gaps
+                var potentialColumns = System.Text.RegularExpressions.Regex.Split(line, @"  +").ToList();
+                
+                // If we have roughly the right number of columns (±1), use this split
+                int expectedColumns = columnPositions.Count + 1;
+                if (Math.Abs(potentialColumns.Count - expectedColumns) <= 1)
+                {
+                    // Clean up each column and join with tabs
+                    var cleanedColumns = potentialColumns.Select(col => col.Trim()).ToList();
+                    
+                    // If we have fewer columns than expected, pad with empty strings
+                    while (cleanedColumns.Count < expectedColumns)
+                        cleanedColumns.Add("");
+                    
+                    // If we have more columns than expected, merge the last ones
+                    if (cleanedColumns.Count > expectedColumns)
+                    {
+                        var lastColumns = cleanedColumns.Skip(expectedColumns - 1);
+                        cleanedColumns = cleanedColumns.Take(expectedColumns - 1).ToList();
+                        cleanedColumns.Add(string.Join(" ", lastColumns));
+                    }
+                    
+                    return string.Join("\t", cleanedColumns);
+                }
+                
+                // Fallback: try to split based on character positions
+                var result = new List<string>();
+                int lastPos = 0;
+                
+                foreach (var position in columnPositions)
+                {
+                    int charPos = (int)(position * line.Length);
+                    
+                    // Find the best split point near this position (look for spaces)
+                    int splitPos = FindBestSplitPoint(line, charPos, lastPos);
+                    
+                    if (splitPos > lastPos)
+                    {
+                        result.Add(line.Substring(lastPos, splitPos - lastPos).Trim());
+                        lastPos = splitPos;
+                    }
+                }
+                
+                // Add the remaining part
+                if (lastPos < line.Length)
+                {
+                    result.Add(line.Substring(lastPos).Trim());
+                }
+                
+                // Ensure we have at least one column
+                if (result.Count == 0)
+                    result.Add(line);
+                
+                return string.Join("\t", result);
+            }
+            catch
+            {
+                // If anything fails, just return the original line
+                return line;
+            }
+        }
+
+        private int FindBestSplitPoint(string line, int targetPos, int minPos)
+        {
+            // Look for a space near the target position
+            int searchRadius = Math.Min(line.Length / 10, 20); // Search within 10% of line length or 20 chars
+            
+            // First, look for spaces after the target position
+            for (int i = 0; i <= searchRadius && targetPos + i < line.Length; i++)
+            {
+                if (targetPos + i > minPos && line[targetPos + i] == ' ')
+                    return targetPos + i;
+            }
+            
+            // Then, look for spaces before the target position
+            for (int i = 1; i <= searchRadius && targetPos - i > minPos; i++)
+            {
+                if (line[targetPos - i] == ' ')
+                    return targetPos - i;
+            }
+            
+            // If no space found, use the target position
+            return Math.Max(targetPos, minPos);
+        }
     }
 
     public class LoadedDocument : IDisposable
