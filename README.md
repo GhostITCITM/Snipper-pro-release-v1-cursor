@@ -1,122 +1,139 @@
-# Snipper Pro - DataSnipper Clone
+# Snipper Pro - Excel Add-in for PDF Data Extraction
 
-A powerful Excel add-in for extracting data from PDFs and images, designed to work exactly like DataSnipper.
+A powerful Excel add-in for extracting data from PDFs and images, designed to work like DataSnipper.
 
 ## 🚀 Features
 
-### **📊 Table Snipping**
-- **Professional Column Adjustment** - Add/remove columns with + and - buttons
-- **Real PDF Rendering** - View actual PDF content, not just text streams
-- **Smart Text Extraction** - PDF text extraction with OCR fallback
-- **Excel Integration** - Tab-delimited output for perfect Excel tables
-
-### **📝 Text & Data Extraction**
-- **Text Snip** - Extract any text from documents
+- **Table Snipping** - Extract tables from PDFs with column adjustment
+- **Text Extraction** - Extract any text from documents  
 - **Sum Snip** - Automatically sum numbers in selected areas
-- **Validation** - Mark items as verified
-- **Exception** - Flag items for review
-
-### **📄 Document Support**
-- **PDF Files** - Full PDF rendering with native text extraction
-- **Image Files** - PNG, JPG, JPEG, BMP, TIFF, GIF
-- **Multi-page Documents** - Navigate through pages with zoom controls
-- **Real-time Preview** - See exactly what you're extracting
-
-## 🛠 Installation
-
-### **Quick Install**
-1. Run `run_as_admin.bat` to register the add-in
-2. Start Excel using `start_excel_with_snipper.bat`
-3. Look for the "SNIPPER PRO" tab in Excel's ribbon
-
-### **Manual Install**
-1. Build the solution in Release mode
-2. Run `register_snipper_pro_simple.ps1` as Administrator
-3. Enable the add-in in Excel: File > Options > Add-ins > COM Add-ins
-
-## 🧪 Usage
-
-1. **Open Excel** - Use the provided batch script for best results
-2. **Click "Load Document"** - Select PDF or image files
-3. **Choose Snip Mode** - Text, Sum, Table, Validation, or Exception
-4. **Draw Selection** - Rectangle around the area to extract
-5. **Adjust Columns** (Table mode) - Use + and - buttons to adjust column dividers
-6. **Double-click** to extract data to Excel
-
-## 🔧 Technical Details
-
-### **Built With**
-- **.NET Framework 4.8** - Core framework
-- **PDFium** - High-quality PDF rendering
-- **Tesseract OCR** - Text recognition fallback
-- **Excel COM Interop** - Direct Excel integration
-
-### **Architecture**
-- **COM Add-in** - Native Excel integration
-- **WinForms UI** - Professional document viewer
-- **Modular Design** - Separate engines for OCR, PDF, and Excel
-
-## 📁 Project Structure
-
-```
-SnipperCloneCleanFinal/
-├── Core/                 # Business logic
-├── Infrastructure/       # Logging, config, auth
-├── UI/                   # Document viewer interface
-├── Assets/               # Resources and ribbon XML
-└── bin/Release/          # Built assemblies and dependencies
-```
-
-## 🚀 Latest Updates
-
-### **PDF Rendering Fix** (Latest)
-- ✅ Fixed PDFium DLL loading issues
-- ✅ Added automatic native library copying
-- ✅ Enhanced error handling and logging
-- ✅ Created launch script for optimal performance
-
-### **Table Snip Enhancement**
-- ✅ DataSnipper-style column adjustment UI
-- ✅ Column-by-column text extraction
-- ✅ Smart tab-delimited Excel output
-- ✅ Professional + and - button interface
-
-## 🔍 Troubleshooting
-
-### **Add-in Not Visible**
-- Run `check_registration.ps1` to verify registration
-- Check Excel: File > Options > Add-ins > COM Add-ins
-- Ensure "Snipper Pro" is checked
-
-### **PDF Not Loading**
-- Use `start_excel_with_snipper.bat` to launch Excel
-- Verify `pdfium.dll` exists in the Release folder
-- Check Windows Event Viewer for DLL errors
-
-### **Table Extraction Issues**
-- Ensure PDF contains actual text (not just images)
-- Adjust column dividers using + and - buttons
-- Try OCR fallback for image-based PDFs
+- **PDF & Image Support** - Full PDF rendering plus PNG, JPG, JPEG, BMP, TIFF, GIF
+- **Excel Integration** - Direct output to Excel with proper formatting
 
 ## 📋 Requirements
 
 - **Windows 10/11**
 - **Microsoft Excel 2016 or later**
 - **.NET Framework 4.8**
-- **Visual C++ Redistributable** (for PDFium)
+- **Visual Studio 2019/2022** (for building)
+- **Administrator privileges** (for registration)
 
-## 🤝 Contributing
+## 🛠 Quick Setup (Recommended)
 
-This is a complete DataSnipper clone implementation. The codebase includes:
-- Full table snipping functionality
-- Professional document viewer
-- Robust error handling
-- Comprehensive logging
+### 1. Build the Project
+```cmd
+build.cmd
+```
 
-## 📄 License
+### 2. Register the Add-in
+```cmd
+run_as_admin.bat
+```
 
-Proprietary - Snipper Pro Project
+### 3. Start Excel
+```cmd
+start_excel_with_snipper.bat
+```
+
+The "SNIPPER PRO" tab should appear in Excel's ribbon.
+
+## 🔧 Manual Setup
+
+### Build from Source
+1. Open `SnipperCloneCleanFinal.sln` in Visual Studio
+2. Set configuration to **Release**
+3. Build Solution (Ctrl+Shift+B)
+4. Ensure all dependencies are copied to `bin\Release\`
+
+### Register COM Add-in
+Run PowerShell as Administrator:
+```powershell
+.\register_snipper_pro_simple.ps1
+```
+
+To unregister:
+```powershell
+.\register_snipper_pro_simple.ps1 -Unregister
+```
+
+### Verify Installation
+```powershell
+.\check_registration.ps1
+```
+
+## 📁 Project Structure
+
+```
+SnipperCloneCleanFinal/
+├── Core/                 # Business logic and extraction engines
+├── Infrastructure/       # Logging, configuration, authentication
+├── UI/                   # Document viewer and user interface
+├── Assets/               # Resources and ribbon XML
+├── Properties/           # Assembly info and settings
+└── tessdata/             # OCR language data files
+```
+
+## 🧪 Usage
+
+1. **Open Excel** using `start_excel_with_snipper.bat`
+2. **Click "Load Document"** in the SNIPPER PRO ribbon
+3. **Select PDF or image file**
+4. **Choose extraction mode**: Text, Sum, Table, Validation, Exception
+5. **Draw selection** around the area to extract
+6. **Adjust columns** (Table mode) using + and - buttons
+7. **Double-click** to extract data to Excel
+
+## 🔍 Troubleshooting
+
+### Add-in Not Visible
+- Run `check_registration.ps1` to verify registration
+- Check Excel: File → Options → Add-ins → COM Add-ins
+- Ensure "Snipper Pro v1" is checked and enabled
+
+### Build Errors
+- Ensure .NET Framework 4.8 is installed
+- Restore NuGet packages: `nuget.exe restore SnipperCloneCleanFinal.sln`
+- Check that all dependencies are available in `packages/` folder
+
+### PDF Loading Issues
+- Use `start_excel_with_snipper.bat` to launch Excel
+- Verify PDFium DLLs exist in the Release folder
+- Check Windows Event Viewer for DLL loading errors
+
+### Registration Issues
+- Always run registration scripts as Administrator
+- Disable antivirus temporarily during registration
+- Check Windows Registry for COM registration entries
+
+## 🔄 Rebuild & Reinstall Process
+
+### Complete Rebuild
+1. Clean solution: `Remove-Item -Recurse SnipperCloneCleanFinal\bin, SnipperCloneCleanFinal\obj`
+2. Restore packages: `nuget.exe restore SnipperCloneCleanFinal.sln`
+3. Build: `build.cmd`
+4. Re-register: `run_as_admin.bat`
+
+### Reinstall Add-in
+1. Unregister: `.\register_snipper_pro_simple.ps1 -Unregister`
+2. Build: `build.cmd`
+3. Register: `.\register_snipper_pro_simple.ps1`
+4. Restart Excel
+
+## 📦 Dependencies
+
+The following packages are automatically managed via NuGet:
+- **PDFium** - PDF rendering engine
+- **Tesseract** - OCR text recognition
+- **Newtonsoft.Json** - JSON processing
+- **Microsoft.Office.Interop.Excel** - Excel COM integration
+
+## 🤝 Support
+
+For issues:
+1. Check troubleshooting section above
+2. Run `verify_installation.ps1` for diagnostic info
+3. Check Windows Event Viewer for detailed error logs
 
 ---
 
-**Ready to use!** 🎉 Start with `start_excel_with_snipper.bat` for the best experience. 
+**Ready to extract data like a pro!** 🎉 
