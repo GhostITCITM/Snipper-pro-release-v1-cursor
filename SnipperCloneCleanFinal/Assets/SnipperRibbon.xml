@@ -3,43 +3,6 @@
   <ribbon>
     <tabs>
       <tab id="SnipperProTab" label="SNIPPER PRO">
-        <group id="SnipGroup" label="Snips">
-          <button id="TextSnipButton" 
-                  label="Text Snip" 
-                  size="large"
-                  onAction="OnTextSnip"
-                  screentip="Extract text from selected area"
-                  supertip="Use OCR to extract text from the selected area in the document viewer." />
-          
-          <button id="SumSnipButton" 
-                  label="Sum Snip" 
-                  size="large"
-                  onAction="OnSumSnip"
-                  screentip="Sum numbers from selected area"
-                  supertip="Extract and sum numerical values from the selected area." />
-          
-          <button id="TableSnipButton" 
-                  label="Table Snip" 
-                  size="large"
-                  onAction="OnTableSnip"
-                  screentip="Extract table data"
-                  supertip="Extract structured table data from the selected area." />
-          
-          <button id="ValidationSnipButton" 
-                  label="Validation" 
-                  size="large"
-                  onAction="OnValidationSnip"
-                  screentip="Mark as validated"
-                  supertip="Mark the selected cell as validated with a checkmark." />
-          
-          <button id="ExceptionSnipButton" 
-                  label="Exception" 
-                  size="large"
-                  onAction="OnExceptionSnip"
-                  screentip="Mark as exception"
-                  supertip="Mark the selected cell as an exception with an X mark." />
-        </group>
-        
         <group id="ViewerGroup" label="Document Viewer">
           <button id="OpenViewerButton" 
                   label="Open Viewer" 
@@ -54,6 +17,48 @@
                   onAction="OnMarkupSnip"
                   screentip="Toggle markup mode"
                   supertip="Enable annotation and markup tools in the document viewer." />
+        </group>
+        
+        <group id="SnipGroup" label="Snips">
+          <button id="TextSnipButton" 
+                  label="Text Snip" 
+                  size="large"
+                  onAction="OnTextSnip"
+                  getImage="GetTextSnipIcon"
+                  screentip="Extract text from selected area"
+                  supertip="Use OCR to extract text from the selected area in the document viewer." />
+          
+          <button id="SumSnipButton" 
+                  label="Sum Snip" 
+                  size="large"
+                  onAction="OnSumSnip"
+                  getImage="GetSumSnipIcon"
+                  screentip="Sum numbers from selected area"
+                  supertip="Extract and sum numerical values from the selected area." />
+          
+          <button id="TableSnipButton" 
+                  label="Table Snip" 
+                  size="large"
+                  onAction="OnTableSnip"
+                  getImage="GetTableSnipIcon"
+                  screentip="Extract table data"
+                  supertip="Extract structured table data from the selected area." />
+          
+          <button id="ValidationSnipButton" 
+                  label="Validation" 
+                  size="large"
+                  onAction="OnValidationSnip"
+                  getImage="GetValidationSnipIcon"
+                  screentip="Mark as validated"
+                  supertip="Mark the selected cell as validated with a checkmark." />
+          
+          <button id="ExceptionSnipButton" 
+                  label="Exception" 
+                  size="large"
+                  onAction="OnExceptionSnip"
+                  getImage="GetExceptionSnipIcon"
+                  screentip="Mark as exception"
+                  supertip="Mark the selected cell as an exception with an X mark." />
         </group>
       </tab>
     </tabs>

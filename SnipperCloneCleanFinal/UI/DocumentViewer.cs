@@ -11,6 +11,7 @@ using SnipperCloneCleanFinal.Infrastructure;
 using CoreRectangle = SnipperCloneCleanFinal.Core.Rectangle;
 using System.Text;
 using PdfiumViewer;
+using Tesseract;
 
 namespace SnipperCloneCleanFinal.UI
 {
@@ -32,6 +33,14 @@ namespace SnipperCloneCleanFinal.UI
         private Button _zoomInButton;
         private Button _zoomOutButton;
         
+        // Search functionality components
+        private TextBox _searchTextBox;
+        private Button _searchBtn;
+        private Button _nextResultBtn;
+        private Button _prevResultBtn;
+        private Label _searchResultsLabel;
+        private Button _closeSearchBtn;
+        
         private List<LoadedDocument> _loadedDocuments = new List<LoadedDocument>();
         private LoadedDocument _currentDocument;
         private int _currentPageIndex = 0;
@@ -43,6 +52,15 @@ namespace SnipperCloneCleanFinal.UI
         private bool _isSelecting = false;
         private System.Drawing.Rectangle _currentSelection = System.Drawing.Rectangle.Empty;
         
+        // Enhanced navigation and zoom properties
+        private bool _isPanning = false;
+        private Point _panStartPoint;
+        private Point _panStartScrollPosition;
+        private Timer _smoothScrollTimer;
+        private Point _targetScrollPosition;
+        private Point _currentScrollPosition;
+        private bool _smoothScrollActive = false;
+        
         // Table snip helpers
         private List<System.Drawing.Rectangle> _tableColumns = new List<System.Drawing.Rectangle>();
         private List<System.Drawing.Rectangle> _tableRows = new List<System.Drawing.Rectangle>();
@@ -50,6 +68,12 @@ namespace SnipperCloneCleanFinal.UI
         private bool _adjustingTable = false;
         private int _draggingColumnIndex = -1;
         private int _dragStartX;
+        
+        // Search functionality data
+        private static Dictionary<string, List<SnipperCloneCleanFinal.UI.DocumentText>> _documentTexts = new Dictionary<string, List<SnipperCloneCleanFinal.UI.DocumentText>>();
+        private List<SnipperCloneCleanFinal.UI.SearchResult> _searchResults = new List<SnipperCloneCleanFinal.UI.SearchResult>();
+        private int _currentSearchResultIndex = -1;
+        private bool _isSearchMode = false;
         
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
 
@@ -72,6 +96,10 @@ namespace SnipperCloneCleanFinal.UI
             // Make the viewer stay on top of Excel
             this.TopMost = true;
             
+            // Enable keyboard events
+            this.KeyPreview = true;
+            this.KeyDown += OnKeyDown;
+            
             // Prevent accidental closing - minimize instead
             this.FormClosing += (s, e) => 
             {
@@ -81,6 +109,11 @@ namespace SnipperCloneCleanFinal.UI
                     this.WindowState = FormWindowState.Minimized;
                 }
             };
+
+            // Initialize smooth scroll timer
+            _smoothScrollTimer = new Timer();
+            _smoothScrollTimer.Interval = 16; // ~60 FPS
+            _smoothScrollTimer.Tick += OnSmoothScrollTick;
 
             // Create main panels
             CreateToolbar();
@@ -96,7 +129,7 @@ namespace SnipperCloneCleanFinal.UI
             var toolbar = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 50,
+                Height = 80,
                 BackColor = Color.LightGray,
                 Padding = new Padding(5)
             };
@@ -160,14 +193,91 @@ namespace SnipperCloneCleanFinal.UI
             _fitToWidthButton = new Button
             {
                 Text = "Fit Width",
-                Size = new Size(80, 30),
+                Size = new Size(70, 30),
                 Location = new Point(615, 10)
             };
             _fitToWidthButton.Click += OnFitToWidth;
 
+            var fitToPageButton = new Button
+            {
+                Text = "Fit Page",
+                Size = new Size(70, 30),
+                Location = new Point(695, 10)
+            };
+            fitToPageButton.Click += (s, e) => FitToPage();
+
+            var resetZoomButton = new Button
+            {
+                Text = "100%",
+                Size = new Size(50, 30),
+                Location = new Point(775, 10)
+            };
+            resetZoomButton.Click += (s, e) => SetZoom(1.0f);
+
+            // Second row - Search functionality
+            var searchLabel = new Label 
+            { 
+                Text = "Search:", 
+                Location = new Point(5, 47), 
+                Size = new Size(50, 20) 
+            };
+            
+            _searchTextBox = new TextBox 
+            { 
+                Location = new Point(60, 45), 
+                Size = new Size(150, 23) 
+            };
+            
+            _searchBtn = new Button 
+            { 
+                Text = "🔍", 
+                Size = new Size(30, 23), 
+                Location = new Point(215, 45) 
+            };
+            
+            _prevResultBtn = new Button 
+            { 
+                Text = "◀", 
+                Size = new Size(25, 23), 
+                Location = new Point(250, 45), 
+                Enabled = false 
+            };
+            
+            _nextResultBtn = new Button 
+            { 
+                Text = "▶", 
+                Size = new Size(25, 23), 
+                Location = new Point(280, 45), 
+                Enabled = false 
+            };
+            
+            _searchResultsLabel = new Label 
+            { 
+                Text = "", 
+                Location = new Point(310, 47), 
+                Size = new Size(80, 20) 
+            };
+            
+            _closeSearchBtn = new Button 
+            { 
+                Text = "✕", 
+                Size = new Size(20, 23), 
+                Location = new Point(395, 45), 
+                Visible = false 
+            };
+
+            // Set up search event handlers
+            _searchBtn.Click += OnSearch;
+            _searchTextBox.KeyDown += OnSearchTextKeyDown;
+            _nextResultBtn.Click += (s, e) => NavigateSearchResult(1);
+            _prevResultBtn.Click += (s, e) => NavigateSearchResult(-1);
+            _closeSearchBtn.Click += OnCloseSearch;
+
             toolbar.Controls.AddRange(new Control[] {
                 _loadDocumentButton, _documentSelector, _prevPageButton, _pageLabel, 
-                _nextPageButton, _zoomOutButton, _zoomInButton, _fitToWidthButton
+                _nextPageButton, _zoomOutButton, _zoomInButton, _fitToWidthButton,
+                fitToPageButton, resetZoomButton,
+                searchLabel, _searchTextBox, _searchBtn, _prevResultBtn, _nextResultBtn, _searchResultsLabel, _closeSearchBtn
             });
 
             this.Controls.Add(toolbar);
@@ -205,6 +315,9 @@ namespace SnipperCloneCleanFinal.UI
                 AutoScrollMinSize = new Size(1200, 1600) // Ensure scrollbars appear
             };
 
+            // Add mouse wheel support for zooming and scrolling
+            _viewerPanel.MouseWheel += OnMouseWheel;
+            
             _documentPictureBox = new PictureBox
             {
                 SizeMode = PictureBoxSizeMode.AutoSize,
@@ -214,12 +327,13 @@ namespace SnipperCloneCleanFinal.UI
                 Anchor = AnchorStyles.None // Don't anchor so it can be centered
             };
             
-            // Add mouse events for snipping
+            // Add mouse events for snipping and panning
             _documentPictureBox.MouseDown += OnMouseDown;
             _documentPictureBox.MouseMove += OnMouseMove;
             _documentPictureBox.MouseUp += OnMouseUp;
             _documentPictureBox.Paint += OnPaint;
             _documentPictureBox.DoubleClick += OnPictureDoubleClick;
+            _documentPictureBox.MouseWheel += OnMouseWheel;
 
             _viewerPanel.Controls.Add(_documentPictureBox);
             this.Controls.Add(_viewerPanel);
@@ -229,7 +343,7 @@ namespace SnipperCloneCleanFinal.UI
         {
             _statusLabel = new Label
             {
-                Text = "Ready - Load documents to begin",
+                Text = "Ready - Load documents to begin | Shortcuts: Ctrl+Wheel=Zoom, Shift+Wheel=H.Scroll, Ctrl+0=100%, Ctrl+1=FitWidth, Middle-click=Pan",
                 Dock = DockStyle.Bottom,
                 Height = 30,
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -325,6 +439,12 @@ namespace SnipperCloneCleanFinal.UI
                         _documentSelector.SelectedIndex = 0;
                         UpdateDocumentsList();
                         _statusLabel.Text = $"Loaded {_loadedDocuments.Count} document(s)";
+                        
+                        // Extract text for search functionality (async to avoid blocking UI)
+                        foreach (var doc in loadedDocs)
+                        {
+                            _ = Task.Run(() => ExtractDocumentTextAsync(doc.FilePath));
+                        }
                     }
                     else
                     {
@@ -823,8 +943,20 @@ namespace SnipperCloneCleanFinal.UI
 
         private void DisplayCurrentPage()
         {
+            DisplayCurrentPageWithCentering(false);
+        }
+        
+        private void DisplayCurrentPageWithCentering(bool maintainCenterPoint = true)
+        {
             if (_currentDocument == null || _currentPageIndex < 0 || _currentPageIndex >= _currentDocument.PageCount)
                 return;
+
+            // Store current center point if we want to maintain it
+            Point centerPoint = Point.Empty;
+            if (maintainCenterPoint && _documentPictureBox.Image != null)
+            {
+                centerPoint = GetViewportCenterPoint();
+            }
 
             var page = _currentDocument.Pages[_currentPageIndex];
             var scaledImage = ScaleImage(page, _zoomFactor);
@@ -833,21 +965,30 @@ namespace SnipperCloneCleanFinal.UI
             _documentPictureBox.Image = scaledImage;
             _documentPictureBox.Size = scaledImage.Size;
             
-            // Ensure scrollbars appear by setting the size
-            _documentPictureBox.Width = scaledImage.Width;
-            _documentPictureBox.Height = scaledImage.Height;
+            // Calculate positioning for better centering
+            var panelSize = _viewerPanel.ClientSize;
+            var imageSize = scaledImage.Size;
             
-            // Update panel's auto-scroll size to match the scaled image
+            // Center the image if it's smaller than the panel
+            int x = Math.Max(10, (panelSize.Width - imageSize.Width) / 2);
+            int y = Math.Max(10, (panelSize.Height - imageSize.Height) / 2);
+            
+            _documentPictureBox.Location = new Point(x, y);
+            
+            // Update panel's auto-scroll size
             _viewerPanel.AutoScrollMinSize = new Size(
-                scaledImage.Width + 40, 
-                scaledImage.Height + 40
+                Math.Max(imageSize.Width + 40, panelSize.Width), 
+                Math.Max(imageSize.Height + 40, panelSize.Height)
             );
-            
-            // Position the image at top-left with some padding
-            _documentPictureBox.Location = new Point(10, 10);
             
             // Force panel to update scrollbars
             _viewerPanel.PerformLayout();
+            
+            // Restore center point if requested
+            if (maintainCenterPoint && centerPoint != Point.Empty)
+            {
+                SetViewportCenterPoint(centerPoint);
+            }
             
             _pageLabel.Text = $"Page {_currentPageIndex + 1} of {_currentDocument.PageCount}";
             _statusLabel.Text = $"Viewing: {_currentDocument.Name} - Page {_currentPageIndex + 1} - Zoom: {_zoomFactor:P0} - REAL PDF CONTENT";
@@ -914,6 +1055,16 @@ namespace SnipperCloneCleanFinal.UI
                 // Check if the PictureBox is valid and not disposed
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
+
+                // Handle middle mouse button for panning
+                if (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && !_isSnipMode))
+                {
+                    _isPanning = true;
+                    _panStartPoint = e.Location;
+                    _panStartScrollPosition = _viewerPanel.AutoScrollPosition;
+                    _documentPictureBox.Cursor = Cursors.Hand;
+                    return;
+                }
 
                 if (_adjustingTable)
                 {
@@ -1080,6 +1231,25 @@ namespace SnipperCloneCleanFinal.UI
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
 
+                // Handle panning
+                if (_isPanning)
+                {
+                    var deltaX = _panStartPoint.X - e.Location.X;
+                    var deltaY = _panStartPoint.Y - e.Location.Y;
+                    
+                    var newScrollX = Math.Abs(_panStartScrollPosition.X) + deltaX;
+                    var newScrollY = Math.Abs(_panStartScrollPosition.Y) + deltaY;
+                    
+                    // Clamp to valid scroll bounds
+                    newScrollX = Math.Max(0, Math.Min(newScrollX, 
+                        Math.Max(0, _viewerPanel.AutoScrollMinSize.Width - _viewerPanel.ClientSize.Width)));
+                    newScrollY = Math.Max(0, Math.Min(newScrollY, 
+                        Math.Max(0, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.ClientSize.Height)));
+                    
+                    _viewerPanel.AutoScrollPosition = new Point(newScrollX, newScrollY);
+                    return;
+                }
+
                 if (_draggingColumnIndex >= 0 && _adjustingTable)
                 {
                     if (_draggingColumnIndex < _tableColumns.Count)
@@ -1218,6 +1388,14 @@ namespace SnipperCloneCleanFinal.UI
                 // Check if the PictureBox is valid and not disposed
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
+
+                // Handle end of panning
+                if (_isPanning)
+                {
+                    _isPanning = false;
+                    _documentPictureBox.Cursor = _isSnipMode ? Cursors.Cross : Cursors.Default;
+                    return;
+                }
 
                 if (_draggingColumnIndex >= 0)
                 {
@@ -1718,6 +1896,42 @@ namespace SnipperCloneCleanFinal.UI
                     }
                 }
             }
+            
+            // Draw search highlights
+            if (_isSearchMode && _searchResults.Count > 0 && _currentDocument != null)
+            {
+                var currentPageResults = _searchResults.Where(r => 
+                    r.DocumentPath == _currentDocument.FilePath && 
+                    r.PageNumber == _currentPageIndex + 1).ToList();
+                
+                foreach (var result in currentPageResults)
+                {
+                    var isCurrentResult = _currentSearchResultIndex >= 0 && 
+                                        _currentSearchResultIndex < _searchResults.Count && 
+                                        _searchResults[_currentSearchResultIndex] == result;
+                    
+                    var highlightColor = isCurrentResult ? Color.Orange : Color.Yellow;
+                    var scaledBounds = new System.Drawing.Rectangle(
+                        (int)(result.Word.Bounds.X * _zoomFactor),
+                        (int)(result.Word.Bounds.Y * _zoomFactor),
+                        (int)(result.Word.Bounds.Width * _zoomFactor),
+                        (int)(result.Word.Bounds.Height * _zoomFactor)
+                    );
+                    
+                    using (var brush = new SolidBrush(Color.FromArgb(100, highlightColor)))
+                    {
+                        e.Graphics.FillRectangle(brush, scaledBounds);
+                    }
+                    
+                    if (isCurrentResult)
+                    {
+                        using (var pen = new Pen(highlightColor, 2))
+                        {
+                            e.Graphics.DrawRectangle(pen, scaledBounds);
+                        }
+                    }
+                }
+            }
         }
 
         public void HighlightRegion(System.Drawing.Rectangle region, Color color)
@@ -1779,24 +1993,303 @@ namespace SnipperCloneCleanFinal.UI
 
         private void OnZoomIn(object sender, EventArgs e)
         {
-            _zoomFactor = Math.Min(_zoomFactor * 1.25f, 3.0f);
-            DisplayCurrentPage();
+            ZoomIn();
         }
 
         private void OnZoomOut(object sender, EventArgs e)
         {
-            _zoomFactor = Math.Max(_zoomFactor / 1.25f, 0.25f);
-            DisplayCurrentPage();
+            ZoomOut();
+        }
+        
+        private void ZoomIn(float customFactor = 1.25f)
+        {
+            var oldZoom = _zoomFactor;
+            _zoomFactor = Math.Min(_zoomFactor * customFactor, 5.0f); // Increased max zoom
+            if (Math.Abs(_zoomFactor - oldZoom) > 0.01f)
+            {
+                DisplayCurrentPageWithCentering();
+            }
+        }
+
+        private void ZoomOut(float customFactor = 1.25f)
+        {
+            var oldZoom = _zoomFactor;
+            _zoomFactor = Math.Max(_zoomFactor / customFactor, 0.1f); // Decreased min zoom
+            if (Math.Abs(_zoomFactor - oldZoom) > 0.01f)
+            {
+                DisplayCurrentPageWithCentering();
+            }
+        }
+        
+        private void SetZoom(float zoomLevel)
+        {
+            var oldZoom = _zoomFactor;
+            _zoomFactor = Math.Max(Math.Min(zoomLevel, 5.0f), 0.1f);
+            if (Math.Abs(_zoomFactor - oldZoom) > 0.01f)
+            {
+                DisplayCurrentPageWithCentering();
+            }
         }
 
         private void OnFitToWidth(object sender, EventArgs e)
         {
+            FitToWidth();
+        }
+        
+        private void FitToWidth()
+        {
             if (_currentDocument != null && _currentPageIndex < _currentDocument.PageCount)
             {
                 var page = _currentDocument.Pages[_currentPageIndex];
-                _zoomFactor = (float)(_viewerPanel.Width - 40) / page.Width;
-                DisplayCurrentPage();
+                var availableWidth = _viewerPanel.ClientSize.Width - 40; // Account for scrollbar and padding
+                _zoomFactor = Math.Max((float)availableWidth / page.Width, 0.1f);
+                DisplayCurrentPageWithCentering();
             }
+        }
+        
+        private void FitToHeight()
+        {
+            if (_currentDocument != null && _currentPageIndex < _currentDocument.PageCount)
+            {
+                var page = _currentDocument.Pages[_currentPageIndex];
+                var availableHeight = _viewerPanel.ClientSize.Height - 40; // Account for scrollbar and padding
+                _zoomFactor = Math.Max((float)availableHeight / page.Height, 0.1f);
+                DisplayCurrentPageWithCentering();
+            }
+        }
+        
+        private void FitToPage()
+        {
+            if (_currentDocument != null && _currentPageIndex < _currentDocument.PageCount)
+            {
+                var page = _currentDocument.Pages[_currentPageIndex];
+                var availableWidth = _viewerPanel.ClientSize.Width - 40;
+                var availableHeight = _viewerPanel.ClientSize.Height - 40;
+                var widthZoom = (float)availableWidth / page.Width;
+                var heightZoom = (float)availableHeight / page.Height;
+                _zoomFactor = Math.Max(Math.Min(widthZoom, heightZoom), 0.1f);
+                DisplayCurrentPageWithCentering();
+            }
+        }
+
+        // Enhanced navigation and zoom event handlers
+        private void OnMouseWheel(object sender, MouseEventArgs e)
+        {
+            if (ModifierKeys.HasFlag(Keys.Control))
+            {
+                // Ctrl + Mouse wheel = zoom
+                if (e.Delta > 0)
+                {
+                    ZoomIn(1.1f); // Smaller increments for smoother zooming
+                }
+                else if (e.Delta < 0)
+                {
+                    ZoomOut(1.1f);
+                }
+            }
+            else
+            {
+                // Regular mouse wheel = scroll
+                var scrollAmount = e.Delta / 3; // Adjust scroll sensitivity
+                
+                if (ModifierKeys.HasFlag(Keys.Shift))
+                {
+                    // Shift + wheel = horizontal scroll
+                    SmoothScrollHorizontal(scrollAmount);
+                }
+                else
+                {
+                    // Vertical scroll
+                    SmoothScrollVertical(scrollAmount);
+                }
+            }
+        }
+        
+        private void OnKeyDown(object sender, KeyEventArgs e)
+        {
+            switch (e.KeyCode)
+            {
+                case Keys.PageDown:
+                case Keys.Right:
+                case Keys.Space:
+                    if (_currentDocument != null && _currentPageIndex < _currentDocument.PageCount - 1)
+                    {
+                        _currentPageIndex++;
+                        DisplayCurrentPage();
+                    }
+                    e.Handled = true;
+                    break;
+                    
+                case Keys.PageUp:
+                case Keys.Left:
+                    if (_currentDocument != null && _currentPageIndex > 0)
+                    {
+                        _currentPageIndex--;
+                        DisplayCurrentPage();
+                    }
+                    e.Handled = true;
+                    break;
+                    
+                case Keys.Home:
+                    if (_currentDocument != null)
+                    {
+                        _currentPageIndex = 0;
+                        DisplayCurrentPage();
+                    }
+                    e.Handled = true;
+                    break;
+                    
+                case Keys.End:
+                    if (_currentDocument != null)
+                    {
+                        _currentPageIndex = _currentDocument.PageCount - 1;
+                        DisplayCurrentPage();
+                    }
+                    e.Handled = true;
+                    break;
+                    
+                case Keys.Oemplus:
+                case Keys.Add:
+                    if (e.Control)
+                    {
+                        ZoomIn();
+                        e.Handled = true;
+                    }
+                    break;
+                    
+                case Keys.OemMinus:
+                case Keys.Subtract:
+                    if (e.Control)
+                    {
+                        ZoomOut();
+                        e.Handled = true;
+                    }
+                    break;
+                    
+                case Keys.D0:
+                    if (e.Control)
+                    {
+                        SetZoom(1.0f);
+                        e.Handled = true;
+                    }
+                    break;
+                    
+                case Keys.D1:
+                    if (e.Control)
+                    {
+                        FitToWidth();
+                        e.Handled = true;
+                    }
+                    break;
+                    
+                case Keys.D2:
+                    if (e.Control)
+                    {
+                        FitToHeight();
+                        e.Handled = true;
+                    }
+                    break;
+                    
+                case Keys.D3:
+                    if (e.Control)
+                    {
+                        FitToPage();
+                        e.Handled = true;
+                    }
+                    break;
+                    
+                case Keys.Up:
+                    SmoothScrollVertical(50);
+                    e.Handled = true;
+                    break;
+                    
+                case Keys.Down:
+                    SmoothScrollVertical(-50);
+                    e.Handled = true;
+                    break;
+            }
+        }
+        
+        private void SmoothScrollVertical(int amount)
+        {
+            _targetScrollPosition = new Point(
+                _viewerPanel.AutoScrollPosition.X,
+                Math.Max(-_viewerPanel.AutoScrollMinSize.Height + _viewerPanel.Height,
+                    Math.Min(0, _viewerPanel.AutoScrollPosition.Y + amount))
+            );
+            StartSmoothScroll();
+        }
+        
+        private void SmoothScrollHorizontal(int amount)
+        {
+            _targetScrollPosition = new Point(
+                Math.Max(-_viewerPanel.AutoScrollMinSize.Width + _viewerPanel.Width,
+                    Math.Min(0, _viewerPanel.AutoScrollPosition.X + amount)),
+                _viewerPanel.AutoScrollPosition.Y
+            );
+            StartSmoothScroll();
+        }
+        
+        private void StartSmoothScroll()
+        {
+            if (!_smoothScrollActive)
+            {
+                _currentScrollPosition = _viewerPanel.AutoScrollPosition;
+                _smoothScrollActive = true;
+                _smoothScrollTimer.Start();
+            }
+        }
+        
+        private void OnSmoothScrollTick(object sender, EventArgs e)
+        {
+            const float smoothingFactor = 0.15f;
+            var dx = (_targetScrollPosition.X - _currentScrollPosition.X) * smoothingFactor;
+            var dy = (_targetScrollPosition.Y - _currentScrollPosition.Y) * smoothingFactor;
+            
+            if (Math.Abs(dx) < 1 && Math.Abs(dy) < 1)
+            {
+                _currentScrollPosition = _targetScrollPosition;
+                _smoothScrollTimer.Stop();
+                _smoothScrollActive = false;
+            }
+            else
+            {
+                _currentScrollPosition = new Point(
+                    _currentScrollPosition.X + (int)dx,
+                    _currentScrollPosition.Y + (int)dy
+                );
+            }
+            
+            _viewerPanel.AutoScrollPosition = new Point(
+                Math.Abs(_currentScrollPosition.X),
+                Math.Abs(_currentScrollPosition.Y)
+            );
+        }
+        
+        private Point GetViewportCenterPoint()
+        {
+            var scrollPos = _viewerPanel.AutoScrollPosition;
+            var viewportCenter = new Point(
+                Math.Abs(scrollPos.X) + _viewerPanel.Width / 2,
+                Math.Abs(scrollPos.Y) + _viewerPanel.Height / 2
+            );
+            
+            // Convert to image coordinates
+            return new Point(
+                viewportCenter.X - _documentPictureBox.Location.X,
+                viewportCenter.Y - _documentPictureBox.Location.Y
+            );
+        }
+        
+        private void SetViewportCenterPoint(Point imagePoint)
+        {
+            var targetScrollX = imagePoint.X + _documentPictureBox.Location.X - _viewerPanel.Width / 2;
+            var targetScrollY = imagePoint.Y + _documentPictureBox.Location.Y - _viewerPanel.Height / 2;
+            
+            _viewerPanel.AutoScrollPosition = new Point(
+                Math.Max(0, Math.Min(targetScrollX, _viewerPanel.AutoScrollMinSize.Width - _viewerPanel.Width)),
+                Math.Max(0, Math.Min(targetScrollY, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.Height))
+            );
         }
 
         private void UpdateDocumentsList()
@@ -1857,6 +2350,9 @@ namespace SnipperCloneCleanFinal.UI
         {
             if (disposing)
             {
+                _smoothScrollTimer?.Stop();
+                _smoothScrollTimer?.Dispose();
+                
                 foreach (var doc in _loadedDocuments)
                 {
                     doc.Dispose();
@@ -2613,6 +3109,399 @@ namespace SnipperCloneCleanFinal.UI
             
             // If no space found, use the target position
             return Math.Max(targetPos, minPos);
+        }
+
+        // Search functionality methods - REAL IMPLEMENTATION
+        private async Task ExtractDocumentTextAsync(string documentPath)
+        {
+            try
+            {
+                if (_documentTexts.ContainsKey(documentPath))
+                    return;
+
+                var documentTexts = new List<SnipperCloneCleanFinal.UI.DocumentText>();
+                var document = _loadedDocuments.FirstOrDefault(d => d.FilePath == documentPath);
+                
+                if (document == null) return;
+
+                Logger.Info($"Starting REAL text extraction for {documentPath}");
+
+                // Extract text from PDF using PdfiumViewer directly
+                if (document.Type == DocumentType.PDF)
+                {
+                    try
+                    {
+                        using (var pdfDocument = PdfiumViewer.PdfDocument.Load(documentPath))
+                        {
+                            for (int pageIndex = 0; pageIndex < pdfDocument.PageCount; pageIndex++)
+                            {
+                                try
+                                {
+                                    var pageText = pdfDocument.GetPdfText(pageIndex);
+                                    if (!string.IsNullOrEmpty(pageText))
+                                    {
+                                        var docText = new SnipperCloneCleanFinal.UI.DocumentText
+                                        {
+                                            PageNumber = pageIndex + 1,
+                                            FullText = pageText
+                                        };
+
+                                        // Split into words and create bounding boxes
+                                        var words = pageText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                                        int x = 50, y = 50;
+                                        
+                                        foreach (var word in words)
+                                        {
+                                            if (!string.IsNullOrWhiteSpace(word))
+                                            {
+                                                var cleanWord = word.Trim();
+                                                docText.Words.Add(new SnipperCloneCleanFinal.UI.TextWord
+                                                {
+                                                    Text = cleanWord,
+                                                    Bounds = new System.Drawing.Rectangle(x, y, cleanWord.Length * 8, 16)
+                                                });
+                                                
+                                                x += cleanWord.Length * 8 + 5;
+                                                if (x > 500) // Wrap to next line
+                                                {
+                                                    x = 50;
+                                                    y += 20;
+                                                }
+                                            }
+                                        }
+                                        
+                                        documentTexts.Add(docText);
+                                        Logger.Info($"Extracted {words.Length} words from page {pageIndex + 1}");
+                                    }
+                                }
+                                catch (Exception pageEx)
+                                {
+                                    Logger.Error($"Failed to extract text from page {pageIndex + 1}: {pageEx.Message}");
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"PdfiumViewer extraction failed: {ex.Message}");
+                    }
+                }
+
+                // If no PDF text found, try extracting from the rendered bitmaps
+                if (documentTexts.Count == 0 && document.Pages.Count > 0)
+                {
+                    try
+                    {
+                        // Use basic OCR on the first few pages
+                        using (var engine = new TesseractEngine(@".\tessdata", "eng", EngineMode.Default))
+                        {
+                            for (int pageIndex = 0; pageIndex < Math.Min(document.Pages.Count, 3); pageIndex++)
+                            {
+                                var page = document.Pages[pageIndex];
+                                if (page != null)
+                                {
+                                    using (var img = PixConverter.ToPix(page))
+                                    {
+                                        using (var tesseractPage = engine.Process(img))
+                                        {
+                                            var extractedText = tesseractPage.GetText();
+                                            if (!string.IsNullOrEmpty(extractedText))
+                                            {
+                                                var docText = new SnipperCloneCleanFinal.UI.DocumentText
+                                                {
+                                                    PageNumber = pageIndex + 1,
+                                                    FullText = extractedText
+                                                };
+
+                                                var words = extractedText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                                                int x = 50, y = 50;
+                                                
+                                                foreach (var word in words)
+                                                {
+                                                    var cleanWord = word.Trim();
+                                                    if (!string.IsNullOrWhiteSpace(cleanWord))
+                                                    {
+                                                        docText.Words.Add(new SnipperCloneCleanFinal.UI.TextWord
+                                                        {
+                                                            Text = cleanWord,
+                                                            Bounds = new System.Drawing.Rectangle(x, y, cleanWord.Length * 8, 16)
+                                                        });
+                                                        
+                                                        x += cleanWord.Length * 8 + 5;
+                                                        if (x > 500)
+                                                        {
+                                                            x = 50;
+                                                            y += 20;
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                documentTexts.Add(docText);
+                                                Logger.Info($"OCR extracted {words.Length} words from page {pageIndex + 1}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"OCR extraction failed: {ex.Message}");
+                    }
+                }
+
+                _documentTexts[documentPath] = documentTexts;
+                var totalWords = documentTexts.Sum(dt => dt.Words.Count);
+                Logger.Info($"REAL text extraction completed for {documentPath}: {totalWords} words extracted");
+                
+                // Update UI
+                if (this.InvokeRequired)
+                {
+                    this.Invoke(new Action(() =>
+                    {
+                        _statusLabel.Text = $"Extracted {totalWords} words from {Path.GetFileName(documentPath)} - ready for search";
+                    }));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Text extraction completely failed for {documentPath}: {ex.Message}");
+                _documentTexts[documentPath] = new List<SnipperCloneCleanFinal.UI.DocumentText>();
+            }
+        }
+
+        private void OnSearch(object sender, EventArgs e)
+        {
+            PerformSearch();
+        }
+
+        private void OnSearchTextKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                PerformSearch();
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                ClearSearch();
+                e.Handled = true;
+            }
+        }
+
+        private void PerformSearch()
+        {
+            var searchTerm = _searchTextBox.Text?.Trim();
+            if (string.IsNullOrEmpty(searchTerm))
+            {
+                ClearSearch();
+                return;
+            }
+
+            Logger.Info($"Starting REAL search for: '{searchTerm}'");
+            _statusLabel.Text = $"Searching for '{searchTerm}'...";
+            _searchResults.Clear();
+            _currentSearchResultIndex = -1;
+
+            // Force extraction and search synchronously
+            Task.Run(async () =>
+            {
+                var allResults = new List<SnipperCloneCleanFinal.UI.SearchResult>();
+
+                foreach (var document in _loadedDocuments)
+                {
+                    // Ensure text is extracted
+                    if (!_documentTexts.ContainsKey(document.FilePath))
+                    {
+                        await ExtractDocumentTextAsync(document.FilePath);
+                    }
+
+                    // Search in extracted text
+                    if (_documentTexts.ContainsKey(document.FilePath))
+                    {
+                        var documentTexts = _documentTexts[document.FilePath];
+                        Logger.Info($"Searching {documentTexts.Count} pages in {Path.GetFileName(document.FilePath)}");
+
+                        foreach (var pageText in documentTexts)
+                        {
+                            // Search full page text
+                            if (!string.IsNullOrEmpty(pageText.FullText) && 
+                                pageText.FullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                Logger.Info($"Found '{searchTerm}' in page {pageText.PageNumber} full text");
+                                
+                                // Find approximate position in text
+                                int index = pageText.FullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
+                                int lineNum = pageText.FullText.Substring(0, index).Count(c => c == '\n');
+                                
+                                allResults.Add(new SnipperCloneCleanFinal.UI.SearchResult
+                                {
+                                    DocumentPath = document.FilePath,
+                                    PageNumber = pageText.PageNumber,
+                                    Word = new SnipperCloneCleanFinal.UI.TextWord
+                                    {
+                                        Text = searchTerm,
+                                        Bounds = new System.Drawing.Rectangle(100, 100 + (lineNum * 20), searchTerm.Length * 10, 20)
+                                    },
+                                    SearchTerm = searchTerm
+                                });
+                            }
+
+                            // Search individual words
+                            foreach (var word in pageText.Words)
+                            {
+                                if (word.Text.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    Logger.Info($"Found '{searchTerm}' in word: '{word.Text}' on page {pageText.PageNumber}");
+                                    
+                                    allResults.Add(new SnipperCloneCleanFinal.UI.SearchResult
+                                    {
+                                        DocumentPath = document.FilePath,
+                                        PageNumber = pageText.PageNumber,
+                                        Word = word,
+                                        SearchTerm = searchTerm
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Also search filename
+                    var fileName = Path.GetFileNameWithoutExtension(document.FilePath);
+                    if (fileName.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        Logger.Info($"Found '{searchTerm}' in filename: {fileName}");
+                        
+                        allResults.Add(new SnipperCloneCleanFinal.UI.SearchResult
+                        {
+                            DocumentPath = document.FilePath,
+                            PageNumber = 1,
+                            Word = new SnipperCloneCleanFinal.UI.TextWord
+                            {
+                                Text = fileName,
+                                Bounds = new System.Drawing.Rectangle(0, 0, fileName.Length * 8, 20)
+                            },
+                            SearchTerm = searchTerm
+                        });
+                    }
+                }
+
+                Logger.Info($"Search completed. Found {allResults.Count} total results for '{searchTerm}'");
+
+                // Update UI on main thread
+                if (this.InvokeRequired)
+                {
+                    this.Invoke(new Action(() =>
+                    {
+                        _searchResults.Clear();
+                        _searchResults.AddRange(allResults);
+                        _isSearchMode = _searchResults.Count > 0;
+                        
+                        if (_searchResults.Count > 0)
+                        {
+                            _currentSearchResultIndex = 0;
+                            NavigateToSearchResult(_searchResults[0]);
+                            _statusLabel.Text = $"Found {_searchResults.Count} matches for '{searchTerm}'";
+                        }
+                        else
+                        {
+                            _statusLabel.Text = $"No results found for '{searchTerm}'";
+                        }
+
+                        UpdateSearchUI();
+                        SafeInvalidate();
+                    }));
+                }
+                else
+                {
+                    _searchResults.Clear();
+                    _searchResults.AddRange(allResults);
+                    _isSearchMode = _searchResults.Count > 0;
+                    
+                    if (_searchResults.Count > 0)
+                    {
+                        _currentSearchResultIndex = 0;
+                        NavigateToSearchResult(_searchResults[0]);
+                        _statusLabel.Text = $"Found {_searchResults.Count} matches for '{searchTerm}'";
+                    }
+                    else
+                    {
+                        _statusLabel.Text = $"No results found for '{searchTerm}'";
+                    }
+
+                    UpdateSearchUI();
+                    SafeInvalidate();
+                }
+            });
+        }
+
+        private void NavigateSearchResult(int direction)
+        {
+            if (_searchResults.Count == 0) return;
+
+            _currentSearchResultIndex += direction;
+            
+            if (_currentSearchResultIndex >= _searchResults.Count)
+                _currentSearchResultIndex = 0;
+            else if (_currentSearchResultIndex < 0)
+                _currentSearchResultIndex = _searchResults.Count - 1;
+
+            NavigateToSearchResult(_searchResults[_currentSearchResultIndex]);
+            UpdateSearchUI();
+        }
+
+        private void NavigateToSearchResult(SnipperCloneCleanFinal.UI.SearchResult result)
+        {
+            // Switch to the correct document if needed
+            var targetDocument = _loadedDocuments.FirstOrDefault(d => d.FilePath == result.DocumentPath);
+            if (targetDocument != null && targetDocument != _currentDocument)
+            {
+                _currentDocument = targetDocument;
+                _documentSelector.SelectedIndex = _loadedDocuments.IndexOf(targetDocument);
+            }
+
+            // Navigate to the correct page
+            if (result.PageNumber - 1 != _currentPageIndex)
+            {
+                _currentPageIndex = result.PageNumber - 1;
+            }
+
+            DisplayCurrentPageWithCentering();
+            SafeInvalidate();
+        }
+
+        private void UpdateSearchUI()
+        {
+            if (_searchResults.Count > 0)
+            {
+                _searchResultsLabel.Text = $"{_currentSearchResultIndex + 1}/{_searchResults.Count}";
+                _prevResultBtn.Enabled = true;
+                _nextResultBtn.Enabled = true;
+                _closeSearchBtn.Visible = true;
+            }
+            else
+            {
+                _searchResultsLabel.Text = _searchTextBox.Text.Trim().Length > 0 ? "No results" : "";
+                _prevResultBtn.Enabled = false;
+                _nextResultBtn.Enabled = false;
+                _closeSearchBtn.Visible = false;
+            }
+        }
+
+        private void OnCloseSearch(object sender, EventArgs e)
+        {
+            ClearSearch();
+        }
+
+        private void ClearSearch()
+        {
+            _searchTextBox.Clear();
+            _searchResults.Clear();
+            _currentSearchResultIndex = -1;
+            _isSearchMode = false;
+            UpdateSearchUI();
+            SafeInvalidate();
         }
     }
 

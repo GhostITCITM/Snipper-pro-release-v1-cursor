@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -286,6 +287,146 @@ namespace SnipperCloneCleanFinal
                 }
             });
         }
+
+        // Icon generation methods for ribbon buttons
+        public stdole.IPictureDisp GetTextSnipIcon(IRibbonControl control)
+        {
+            return CreateColoredRectangleIcon(System.Drawing.Color.Blue);
+        }
+
+        public stdole.IPictureDisp GetSumSnipIcon(IRibbonControl control)
+        {
+            return CreateColoredRectangleIcon(System.Drawing.Color.Purple);
+        }
+
+        public stdole.IPictureDisp GetTableSnipIcon(IRibbonControl control)
+        {
+            return CreateColoredRectangleIcon(System.Drawing.Color.Purple);
+        }
+
+        public stdole.IPictureDisp GetValidationSnipIcon(IRibbonControl control)
+        {
+            return CreateColoredRectangleIcon(System.Drawing.Color.Green);
+        }
+
+        public stdole.IPictureDisp GetExceptionSnipIcon(IRibbonControl control)
+        {
+            return CreateColoredRectangleIcon(System.Drawing.Color.Red);
+        }
+
+        private stdole.IPictureDisp CreateColoredRectangleIcon(System.Drawing.Color color)
+        {
+            try
+            {
+                // Create a larger, more visible bitmap for the icon (48x48 pixels for ribbon)
+                using (var bitmap = new System.Drawing.Bitmap(48, 48, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+                    {
+                        // Set high quality rendering
+                        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        
+                        // Clear with white background for better visibility
+                        graphics.Clear(System.Drawing.Color.White);
+                        
+                        // Draw a larger, more visible colored rectangle
+                        using (var brush = new System.Drawing.SolidBrush(color))
+                        {
+                            // Create a larger rectangle with less padding
+                            var rect = new System.Drawing.Rectangle(8, 8, 32, 32);
+                            graphics.FillRectangle(brush, rect);
+                            
+                            // Add a darker border for better definition
+                            using (var pen = new System.Drawing.Pen(System.Drawing.Color.Black, 2))
+                            {
+                                graphics.DrawRectangle(pen, rect);
+                            }
+                        }
+                    }
+                    
+                    // Use a simpler approach to create the IPictureDisp
+                    return ConvertBitmapToIPicture(bitmap);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error creating icon: {ex.Message}");
+                return null;
+            }
+        }
+        
+        private stdole.IPictureDisp ConvertBitmapToIPicture(System.Drawing.Bitmap bitmap)
+        {
+            try
+            {
+                // Save bitmap to memory stream
+                using (var stream = new System.IO.MemoryStream())
+                {
+                    bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                    stream.Position = 0;
+                    
+                    // Convert stream to byte array
+                    byte[] imageBytes = stream.ToArray();
+                    
+                    // Create IPictureDisp from byte array using OLE functions
+                    IntPtr hGlobal = Marshal.AllocHGlobal(imageBytes.Length);
+                    try
+                    {
+                        Marshal.Copy(imageBytes, 0, hGlobal, imageBytes.Length);
+                        
+                        // Create IStream from global memory
+                        if (CreateStreamOnHGlobal(hGlobal, false, out IStream stream2) == 0)
+                        {
+                            // Create IPicture from stream
+                            Guid riid = new Guid("7BF80980-BF32-101A-8BBB-00AA00300CAB"); // IID_IPicture
+                            if (OleLoadPicture(stream2, imageBytes.Length, false, ref riid, out object picture) == 0)
+                            {
+                                return (stdole.IPictureDisp)picture;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(hGlobal);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error converting bitmap to IPicture: {ex.Message}");
+            }
+            
+            return null;
+        }
+        
+        [ComImport, Guid("0000000c-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IStream
+        {
+            void Read([Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] byte[] pv, uint cb, out uint pcbRead);
+            void Write([MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] byte[] pv, uint cb, out uint pcbWritten);
+            void Seek(long dlibMove, uint dwOrigin, out long plibNewPosition);
+            void SetSize(long libNewSize);
+            void CopyTo(IStream pstm, long cb, out long pcbRead, out long pcbWritten);
+            void Commit(uint grfCommitFlags);
+            void Revert();
+            void LockRegion(long libOffset, long cb, uint dwLockType);
+            void UnlockRegion(long libOffset, long cb, uint dwLockType);
+            void Stat(out System.Runtime.InteropServices.ComTypes.STATSTG pstatstg, uint grfStatFlag);
+            void Clone(out IStream ppstm);
+        }
+        
+        [DllImport("ole32.dll")]
+        private static extern int CreateStreamOnHGlobal(IntPtr hGlobal, bool fDeleteOnRelease, out IStream ppstm);
+        
+        [DllImport("oleaut32.dll")]
+        private static extern int OleLoadPicture(IStream lpstream, int lSize, bool fRunmode, ref Guid riid, out object lplpvObj);
+        
+
+
+        // Import Windows API for cleanup
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
 
         private void ExecuteCallback(string callbackName, System.Action action)
         {
@@ -816,23 +957,6 @@ namespace SnipperCloneCleanFinal
   <ribbon>
     <tabs>
       <tab id=""SnipperProTab"" label=""SNIPPER PRO"">
-        <group id=""SnipGroup"" label=""Snips"">
-          <button id=""TextSnipButton"" label=""Text Snip"" size=""large"" onAction=""OnTextSnip""
-                  screentip=""Extract text from selected area"" 
-                  supertip=""Use OCR to extract text from the selected area in the document viewer. Creates DS.TEXTS() formula."" />
-          <button id=""SumSnipButton"" label=""Sum Snip"" size=""large"" onAction=""OnSumSnip""
-                  screentip=""Sum numbers from selected area""
-                  supertip=""Extract and sum numerical values from the selected area. Creates DS.SUMS() formula."" />
-          <button id=""TableSnipButton"" label=""Table Snip"" size=""large"" onAction=""OnTableSnip""
-                  screentip=""Extract table data""
-                  supertip=""Extract structured table data from the selected area."" />
-          <button id=""ValidationSnipButton"" label=""Validation"" size=""large"" onAction=""OnValidationSnip""
-                  screentip=""Mark as validated""
-                  supertip=""Mark the selected cell as validated with a checkmark."" />
-          <button id=""ExceptionSnipButton"" label=""Exception"" size=""large"" onAction=""OnExceptionSnip""
-                  screentip=""Mark as exception""
-                  supertip=""Mark the selected cell as an exception with an X mark."" />
-        </group>
         <group id=""ViewerGroup"" label=""Document Viewer"">
           <button id=""OpenViewerButton"" label=""Open Viewer"" size=""large"" onAction=""OnOpenViewer""
                   screentip=""Open document viewer""
@@ -840,6 +964,28 @@ namespace SnipperCloneCleanFinal
           <button id=""MarkupButton"" label=""Markup"" size=""large"" onAction=""OnMarkupSnip""
                   screentip=""Toggle markup mode""
                   supertip=""Enable annotation and markup tools in the document viewer."" />
+        </group>
+        <group id=""SnipGroup"" label=""Snips"">
+          <button id=""TextSnipButton"" label=""Text Snip"" size=""large"" onAction=""OnTextSnip""
+                  getImage=""GetTextSnipIcon""
+                  screentip=""Extract text from selected area"" 
+                  supertip=""Use OCR to extract text from the selected area in the document viewer. Creates DS.TEXTS() formula."" />
+          <button id=""SumSnipButton"" label=""Sum Snip"" size=""large"" onAction=""OnSumSnip""
+                  getImage=""GetSumSnipIcon""
+                  screentip=""Sum numbers from selected area""
+                  supertip=""Extract and sum numerical values from the selected area. Creates DS.SUMS() formula."" />
+          <button id=""TableSnipButton"" label=""Table Snip"" size=""large"" onAction=""OnTableSnip""
+                  getImage=""GetTableSnipIcon""
+                  screentip=""Extract table data""
+                  supertip=""Extract structured table data from the selected area."" />
+          <button id=""ValidationSnipButton"" label=""Validation"" size=""large"" onAction=""OnValidationSnip""
+                  getImage=""GetValidationSnipIcon""
+                  screentip=""Mark as validated""
+                  supertip=""Mark the selected cell as validated with a checkmark."" />
+          <button id=""ExceptionSnipButton"" label=""Exception"" size=""large"" onAction=""OnExceptionSnip""
+                  getImage=""GetExceptionSnipIcon""
+                  screentip=""Mark as exception""
+                  supertip=""Mark the selected cell as an exception with an X mark."" />
         </group>
       </tab>
     </tabs>
