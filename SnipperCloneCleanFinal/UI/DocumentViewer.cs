@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
@@ -70,10 +71,19 @@ namespace SnipperCloneCleanFinal.UI
         private int _dragStartX;
         
         // Search functionality data
-        private static Dictionary<string, List<SnipperCloneCleanFinal.UI.DocumentText>> _documentTexts = new Dictionary<string, List<SnipperCloneCleanFinal.UI.DocumentText>>();
-        private List<SnipperCloneCleanFinal.UI.SearchResult> _searchResults = new List<SnipperCloneCleanFinal.UI.SearchResult>();
+        private static Dictionary<string, List<DocumentText>> _documentTexts = new Dictionary<string, List<DocumentText>>();
+        private List<SearchResult> _searchResults = new List<SearchResult>();
         private int _currentSearchResultIndex = -1;
         private bool _isSearchMode = false;
+        private Timer _searchDebounceTimer;
+        private string _lastSearchTerm = "";
+        private bool _isSearching = false;
+        
+        // Snip tracking and trashcan functionality
+        private const int TRASH_SIZE = 16;          // px
+        private readonly Bitmap _trashIcon;         // loaded once
+        private readonly Pen _trashBorder = new Pen(Color.Black, 1);
+        private List<SnipRecord> _permanentSnips = new List<SnipRecord>();
         
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
 
@@ -81,9 +91,38 @@ namespace SnipperCloneCleanFinal.UI
         {
             _snippEngine = snippEngine ?? throw new ArgumentNullException(nameof(snippEngine));
             _ocrEngine = new OCREngine();
+            
+            // Initialize search debounce timer for smooth search experience
+            _searchDebounceTimer = new Timer();
+            _searchDebounceTimer.Interval = 300; // 300ms delay
+            _searchDebounceTimer.Tick += OnSearchDebounceTimer;
+            
+            // Initialize trash icon
+            _trashIcon = BuildTrashIcon();
+            
             InitializeComponent();
             SetupUI();
             Logger.Info("DocumentViewer initialized with full functionality");
+        }
+        
+        private Bitmap BuildTrashIcon()
+        {
+            var bmp = new Bitmap(TRASH_SIZE, TRASH_SIZE, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+
+                // simple trashcan: bucket + lid
+                using var body = new SolidBrush(Color.FromArgb(220, 60, 60));
+                g.FillRectangle(body, 4, 5, 8, 8);      // bucket
+                g.FillRectangle(body, 3, 3, 10, 2);     // lid
+                g.DrawLine(_trashBorder, 5, 5, 5, 12);  // vertical stripes
+                g.DrawLine(_trashBorder, 8, 5, 8, 12);
+                g.DrawRectangle(_trashBorder, 4, 5, 8, 8);
+                g.DrawRectangle(_trashBorder, 3, 3, 10, 2);
+            }
+            return bmp;
         }
 
         private void SetupUI()
@@ -269,6 +308,7 @@ namespace SnipperCloneCleanFinal.UI
             // Set up search event handlers
             _searchBtn.Click += OnSearch;
             _searchTextBox.KeyDown += OnSearchTextKeyDown;
+            _searchTextBox.TextChanged += OnSearchTextChanged; // Add smooth text change handling
             _nextResultBtn.Click += (s, e) => NavigateSearchResult(1);
             _prevResultBtn.Click += (s, e) => NavigateSearchResult(-1);
             _closeSearchBtn.Click += OnCloseSearch;
@@ -1017,6 +1057,16 @@ namespace SnipperCloneCleanFinal.UI
             
             return scaled;
         }
+        
+        private System.Drawing.Rectangle ScaleRect(System.Drawing.Rectangle rect)
+        {
+            return new System.Drawing.Rectangle(
+                (int)(rect.X * _zoomFactor),
+                (int)(rect.Y * _zoomFactor),
+                (int)(rect.Width * _zoomFactor),
+                (int)(rect.Height * _zoomFactor)
+            );
+        }
 
         public void SetSnipMode(SnipMode snipMode, bool enabled)
         {
@@ -1381,6 +1431,29 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
 
+        private void SafeInvalidateRegion(System.Drawing.Rectangle region)
+        {
+            try
+            {
+                if (_documentPictureBox != null && !_documentPictureBox.IsDisposed && _documentPictureBox.IsHandleCreated)
+                {
+                    // Add padding to ensure smooth highlighting
+                    var paddedRegion = new System.Drawing.Rectangle(
+                        Math.Max(0, region.X - 3), 
+                        Math.Max(0, region.Y - 3),
+                        region.Width + 6, 
+                        region.Height + 6
+                    );
+
+                    _documentPictureBox.Invalidate(paddedRegion);
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore invalidate errors
+            }
+        }
+
         private void OnMouseUp(object sender, MouseEventArgs e)
         {
             try
@@ -1388,6 +1461,32 @@ namespace SnipperCloneCleanFinal.UI
                 // Check if the PictureBox is valid and not disposed
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
+
+                // Check for trash icon clicks first
+                if (e.Button == MouseButtons.Left && _currentDocument != null)
+                {
+                    var currentPageSnips = _permanentSnips.Where(s => 
+                        s.PageIndex == _currentPageIndex && 
+                        s.DocumentPath == _currentDocument.FilePath).ToList();
+                    
+                    foreach (var snip in currentPageSnips)
+                    {
+                        var scaledBounds = ScaleRect(snip.Bounds);
+                        var trashRect = new System.Drawing.Rectangle(
+                            scaledBounds.Right - TRASH_SIZE, 
+                            scaledBounds.Top, 
+                            TRASH_SIZE, 
+                            TRASH_SIZE);
+                        
+                        if (trashRect.Contains(e.Location))
+                        {
+                            _permanentSnips.Remove(snip);
+                            _statusLabel.Text = $"Snip deleted: {snip.SnipMode}";
+                            SafeInvalidate();
+                            return; // Only delete one snip per click
+                        }
+                    }
+                }
 
                 // Handle end of panning
                 if (_isPanning)
@@ -1681,8 +1780,19 @@ namespace SnipperCloneCleanFinal.UI
                 // Fire the event to send data to Excel
                 SnipAreaSelected?.Invoke(this, args);
                 
-                // Visual feedback - add permanent highlight
-                AddPermanentHighlight(_currentSelection, GetSnipColor(_currentSnipMode));
+                // Add to permanent snips collection for trashcan functionality and visual display
+                if (success)
+                {
+                    var snipRecord = new SnipRecord
+                    {
+                        Bounds = _currentSelection,
+                        Color = GetSnipColor(_currentSnipMode),
+                        PageIndex = _currentPageIndex,
+                        SnipMode = _currentSnipMode,
+                        DocumentPath = _currentDocument.FilePath
+                    };
+                    _permanentSnips.Add(snipRecord);
+                }
                 
                 // Update status with more specific feedback
                 if (args.Success)
@@ -1897,56 +2007,126 @@ namespace SnipperCloneCleanFinal.UI
                 }
             }
             
-            // Draw search highlights
+            // Draw search highlights - DataSnipper style
             if (_isSearchMode && _searchResults.Count > 0 && _currentDocument != null)
             {
+                // Get all search results for the current page
                 var currentPageResults = _searchResults.Where(r => 
                     r.DocumentPath == _currentDocument.FilePath && 
                     r.PageNumber == _currentPageIndex + 1).ToList();
                 
+                Logger.Info($"Drawing {currentPageResults.Count} search highlights on page {_currentPageIndex + 1}");
+                
                 foreach (var result in currentPageResults)
                 {
-                    var isCurrentResult = _currentSearchResultIndex >= 0 && 
-                                        _currentSearchResultIndex < _searchResults.Count && 
-                                        _searchResults[_currentSearchResultIndex] == result;
+                    try
+                    {
+                        var isCurrentResult = _currentSearchResultIndex >= 0 && 
+                                            _currentSearchResultIndex < _searchResults.Count && 
+                                            _searchResults[_currentSearchResultIndex] == result;
+                        
+                        // Use DataSnipper colors: Yellow for all matches, Orange for current
+                        var highlightColor = isCurrentResult ? Color.Orange : Color.Yellow;
+                        
+                        // Apply zoom factor to the bounds
+                        var originalBounds = result.Word.Bounds;
+                        var scaledBounds = new System.Drawing.Rectangle(
+                            (int)(originalBounds.X * _zoomFactor),
+                            (int)(originalBounds.Y * _zoomFactor),
+                            (int)(originalBounds.Width * _zoomFactor),
+                            (int)(originalBounds.Height * _zoomFactor)
+                        );
+                        
+                        // Ensure bounds are visible and reasonable
+                        if (scaledBounds.Width < 10) scaledBounds.Width = result.SearchTerm.Length * 8;
+                        if (scaledBounds.Height < 10) scaledBounds.Height = 18;
+                        
+                        Logger.Info($"Drawing highlight at {scaledBounds} for '{result.SearchTerm}' (current: {isCurrentResult})");
+                        
+                        // Draw semi-transparent highlight background
+                        using (var brush = new SolidBrush(Color.FromArgb(120, highlightColor)))
+                        {
+                            e.Graphics.FillRectangle(brush, scaledBounds);
+                        }
+                        
+                        // Draw border for current result
+                        if (isCurrentResult)
+                        {
+                            using (var pen = new Pen(Color.FromArgb(200, Color.DarkOrange), 3))
+                            {
+                                e.Graphics.DrawRectangle(pen, scaledBounds);
+                            }
+                        }
+                        else
+                        {
+                            // Draw subtle border for all highlights
+                            using (var pen = new Pen(Color.FromArgb(150, Color.DarkGoldenrod), 1))
+                            {
+                                e.Graphics.DrawRectangle(pen, scaledBounds);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"Error drawing search highlight: {ex.Message}");
+                    }
+                }
+                
+                if (currentPageResults.Count > 0)
+                {
+                    Logger.Info($"Successfully drew {currentPageResults.Count} search highlights");
+                }
+            }
+            
+            // Draw permanent snips and their trash icons
+            if (_currentDocument != null)
+            {
+                var currentPageSnips = _permanentSnips.Where(s => 
+                    s.PageIndex == _currentPageIndex && 
+                    s.DocumentPath == _currentDocument.FilePath).ToList();
+                
+                foreach (var snip in currentPageSnips)
+                {
+                    var scaledBounds = ScaleRect(snip.Bounds);
                     
-                    var highlightColor = isCurrentResult ? Color.Orange : Color.Yellow;
-                    var scaledBounds = new System.Drawing.Rectangle(
-                        (int)(result.Word.Bounds.X * _zoomFactor),
-                        (int)(result.Word.Bounds.Y * _zoomFactor),
-                        (int)(result.Word.Bounds.Width * _zoomFactor),
-                        (int)(result.Word.Bounds.Height * _zoomFactor)
-                    );
+                    // Draw snip rectangle
+                    using (var pen = new Pen(snip.Color, 3))
+                    {
+                        e.Graphics.DrawRectangle(pen, scaledBounds);
+                    }
                     
-                    using (var brush = new SolidBrush(Color.FromArgb(100, highlightColor)))
+                    // Draw semi-transparent overlay
+                    using (var brush = new SolidBrush(Color.FromArgb(30, snip.Color)))
                     {
                         e.Graphics.FillRectangle(brush, scaledBounds);
                     }
                     
-                    if (isCurrentResult)
-                    {
-                        using (var pen = new Pen(highlightColor, 2))
-                        {
-                            e.Graphics.DrawRectangle(pen, scaledBounds);
-                        }
-                    }
+                    // Draw trash icon
+                    var trashRect = new System.Drawing.Rectangle(
+                        scaledBounds.Right - TRASH_SIZE, 
+                        scaledBounds.Top, 
+                        TRASH_SIZE, 
+                        TRASH_SIZE);
+                    e.Graphics.DrawImage(_trashIcon, trashRect);
                 }
             }
         }
 
         public void HighlightRegion(System.Drawing.Rectangle region, Color color)
         {
-            // Add permanent highlight to show processed areas
-            if (_documentPictureBox.Image != null)
+            // Create a temporary snip record for external highlighting
+            if (_currentDocument != null)
             {
-                using (var g = Graphics.FromImage(_documentPictureBox.Image))
+                var snipRecord = new SnipRecord
                 {
-                    using (var pen = new Pen(color, 3))
-                    {
-                        g.DrawRectangle(pen, region);
-                    }
-                }
-                _documentPictureBox.Invalidate();
+                    Bounds = region,
+                    Color = color,
+                    PageIndex = _currentPageIndex,
+                    SnipMode = SnipMode.Text, // Default mode for external highlights
+                    DocumentPath = _currentDocument.FilePath
+                };
+                _permanentSnips.Add(snipRecord);
+                SafeInvalidate();
             }
         }
 
@@ -2109,6 +2289,39 @@ namespace SnipperCloneCleanFinal.UI
         {
             switch (e.KeyCode)
             {
+                case Keys.F:
+                    if (e.Control)
+                    {
+                        // Ctrl+F - Open search (DataSnipper style)
+                        _searchTextBox.Focus();
+                        _searchTextBox.SelectAll();
+                        e.Handled = true;
+                    }
+                    break;
+
+                case Keys.F3:
+                    // F3 - Find next, Shift+F3 - Find previous (DataSnipper style)
+                    if (_isSearchMode && _searchResults.Count > 0)
+                    {
+                        NavigateSearchResult(e.Shift ? -1 : 1);
+                        e.Handled = true;
+                    }
+                    break;
+
+                case Keys.Escape:
+                    // Close search mode or snip mode (DataSnipper style)
+                    if (_isSearchMode)
+                    {
+                        ClearSearch();
+                        e.Handled = true;
+                    }
+                    else if (_isSnipMode)
+                    {
+                        SetSnipMode(SnipMode.None, false);
+                        e.Handled = true;
+                    }
+                    break;
+
                 case Keys.PageDown:
                 case Keys.Right:
                 case Keys.Space:
@@ -2853,6 +3066,21 @@ namespace SnipperCloneCleanFinal.UI
         [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_ClosePage")]
         private static extern void FPDFText_ClosePage(IntPtr textPage);
         
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDF_GetPageCount")]
+        private static extern int FPDF_GetPageCount(IntPtr document);
+
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDF_GetPageHeight")]
+        private static extern double FPDF_GetPageHeight(IntPtr page);
+
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_CountChars")]
+        private static extern int FPDFText_CountChars(IntPtr textPage);
+
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_GetUnicode")]
+        private static extern uint FPDFText_GetUnicode(IntPtr textPage, int index);
+
+        [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_GetCharBox")]
+        private static extern void FPDFText_GetCharBox(IntPtr textPage, int index, out double left, out double right, out double bottom, out double top);
+
         [System.Runtime.InteropServices.DllImport("pdfium.dll", EntryPoint = "FPDFText_GetBoundedText")]
         private static extern int FPDFText_GetBoundedText(IntPtr textPage, double left, double top, double right, double bottom,
                                                           ushort[] buffer, int bufferLen);
@@ -3111,7 +3339,6 @@ namespace SnipperCloneCleanFinal.UI
             return Math.Max(targetPos, minPos);
         }
 
-        // Search functionality methods - REAL IMPLEMENTATION
         private async Task ExtractDocumentTextAsync(string documentPath)
         {
             try
@@ -3119,168 +3346,311 @@ namespace SnipperCloneCleanFinal.UI
                 if (_documentTexts.ContainsKey(documentPath))
                     return;
 
-                var documentTexts = new List<SnipperCloneCleanFinal.UI.DocumentText>();
+                Logger.Info($"Starting comprehensive text extraction with REAL coordinates for {documentPath}");
+                var documentTexts = new List<DocumentText>();
                 var document = _loadedDocuments.FirstOrDefault(d => d.FilePath == documentPath);
                 
-                if (document == null) return;
+                if (document == null) 
+                {
+                    Logger.Error($"Document not found in loaded documents: {documentPath}");
+                    return;
+                }
 
-                Logger.Info($"Starting REAL text extraction for {documentPath}");
-
-                // Extract text from PDF using PdfiumViewer directly
+                // Extract text from PDF properly - page by page using DIRECT PDFIUM calls for real coordinates
                 if (document.Type == DocumentType.PDF)
                 {
                     try
                     {
-                        using (var pdfDocument = PdfiumViewer.PdfDocument.Load(documentPath))
+                        // Use direct pdfium calls to get REAL text coordinates
+                        IntPtr pdfDocument = IntPtr.Zero;
+                        IntPtr textPage = IntPtr.Zero;
+                        
+                        try
                         {
-                            for (int pageIndex = 0; pageIndex < pdfDocument.PageCount; pageIndex++)
+                            // Load PDF document with direct pdfium calls
+                            pdfDocument = FPDF_LoadDocument(documentPath, null);
+                            if (pdfDocument == IntPtr.Zero)
+                            {
+                                Logger.Error($"Failed to load PDF document: {documentPath}");
+                                throw new Exception("Failed to load PDF document");
+                            }
+                            
+                            int pageCount = FPDF_GetPageCount(pdfDocument);
+                            Logger.Info($"PDF loaded with direct pdfium: {pageCount} pages");
+                            
+                            for (int pageIndex = 0; pageIndex < pageCount; pageIndex++)
                             {
                                 try
                                 {
+                                    // Load page
+                                    IntPtr page = FPDF_LoadPage(pdfDocument, pageIndex);
+                                    if (page == IntPtr.Zero)
+                                    {
+                                        Logger.Warning($"Failed to load page {pageIndex + 1}");
+                                        continue;
+                                    }
+                                    
+                                    // Load text page for coordinate extraction
+                                    textPage = FPDFText_LoadPage(page);
+                                    if (textPage == IntPtr.Zero)
+                                    {
+                                        Logger.Warning($"Failed to load text page {pageIndex + 1}");
+                                        FPDF_ClosePage(page);
+                                        continue;
+                                    }
+                                    
+                                    var docText = new DocumentText
+                                    {
+                                        PageNumber = pageIndex + 1,
+                                        FullText = "",
+                                        Words = new List<TextWord>()
+                                    };
+
+                                    // Get character count on page
+                                    int charCount = FPDFText_CountChars(textPage);
+                                    Logger.Info($"Page {pageIndex + 1}: {charCount} characters");
+                                    
+                                    var fullTextBuilder = new StringBuilder();
+                                    var currentWord = new StringBuilder();
+                                    var currentWordBounds = System.Drawing.Rectangle.Empty;
+                                    bool inWord = false;
+                                    
+                                    // Process each character to get REAL coordinates
+                                    for (int charIndex = 0; charIndex < charCount; charIndex++)
+                                    {
+                                        // Get character
+                                        uint unicode = FPDFText_GetUnicode(textPage, charIndex);
+                                        char ch = (char)unicode;
+                                        fullTextBuilder.Append(ch);
+                                        
+                                        // Get character bounding box - REAL COORDINATES!
+                                        double left, right, bottom, top;
+                                        FPDFText_GetCharBox(textPage, charIndex, out left, out right, out bottom, out top);
+                                        
+                                        // Convert PDF coordinates to display coordinates
+                                        // PDF uses bottom-left origin, we need top-left for display
+                                        double pageHeight = FPDF_GetPageHeight(page);
+                                        var charRect = new System.Drawing.Rectangle(
+                                            (int)(left * PDF_RENDER_DPI / 72.0),              // X coordinate
+                                            (int)((pageHeight - top) * PDF_RENDER_DPI / 72.0), // Y coordinate (flip to top-left)
+                                            (int)((right - left) * PDF_RENDER_DPI / 72.0),    // Width
+                                            (int)((top - bottom) * PDF_RENDER_DPI / 72.0)     // Height
+                                        );
+                                        
+                                        if (char.IsWhiteSpace(ch))
+                                        {
+                                            // End of word - save it if we have one
+                                            if (inWord && currentWord.Length > 0)
+                                            {
+                                                docText.Words.Add(new TextWord
+                                                {
+                                                    Text = currentWord.ToString(),
+                                                    Bounds = currentWordBounds
+                                                });
+                                                Logger.Info($"Added word: '{currentWord}' at {currentWordBounds}");
+                                                currentWord.Clear();
+                                                inWord = false;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Part of a word
+                                            if (!inWord)
+                                            {
+                                                // Start new word
+                                                currentWordBounds = charRect;
+                                                inWord = true;
+                                            }
+                                            else
+                                            {
+                                                // Extend word bounds to include this character
+                                                currentWordBounds = System.Drawing.Rectangle.Union(currentWordBounds, charRect);
+                                            }
+                                            currentWord.Append(ch);
+                                        }
+                                    }
+                                    
+                                    // Don't forget the last word if the page doesn't end with whitespace
+                                    if (inWord && currentWord.Length > 0)
+                                    {
+                                        docText.Words.Add(new TextWord
+                                        {
+                                            Text = currentWord.ToString(),
+                                            Bounds = currentWordBounds
+                                        });
+                                        Logger.Info($"Added final word: '{currentWord}' at {currentWordBounds}");
+                                    }
+                                    
+                                    docText.FullText = fullTextBuilder.ToString();
+                                    documentTexts.Add(docText);
+                                    
+                                    Logger.Info($"Page {pageIndex + 1}: {docText.Words.Count} words with REAL coordinates extracted");
+                                    
+                                    // Clean up page resources
+                                    FPDFText_ClosePage(textPage);
+                                    FPDF_ClosePage(page);
+                                    textPage = IntPtr.Zero;
+                                }
+                                catch (Exception pageEx)
+                                {
+                                    Logger.Error($"Failed to extract text from page {pageIndex + 1}: {pageEx.Message}");
+                                    // Add empty page to maintain page numbering
+                                    documentTexts.Add(new DocumentText
+                                    {
+                                        PageNumber = pageIndex + 1,
+                                        FullText = "",
+                                        Words = new List<TextWord>()
+                                    });
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            // Clean up pdfium resources
+                            if (textPage != IntPtr.Zero)
+                                FPDFText_ClosePage(textPage);
+                            if (pdfDocument != IntPtr.Zero)
+                                FPDF_CloseDocument(pdfDocument);
+                        }
+                        
+                        Logger.Info($"PDF text extraction with REAL coordinates completed: {documentTexts.Count} pages processed");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"PDF processing with pdfium failed: {ex.Message}");
+                        
+                        // Fallback to PdfiumViewer basic extraction
+                        try
+                        {
+                            using (var pdfDocument = PdfiumViewer.PdfDocument.Load(documentPath))
+                            {
+                                Logger.Info($"Fallback to PdfiumViewer: {pdfDocument.PageCount} pages");
+                                
+                                for (int pageIndex = 0; pageIndex < pdfDocument.PageCount; pageIndex++)
+                                {
                                     var pageText = pdfDocument.GetPdfText(pageIndex);
+                                    
+                                    var docText = new DocumentText
+                                    {
+                                        PageNumber = pageIndex + 1,
+                                        FullText = pageText ?? "",
+                                        Words = new List<TextWord>()
+                                    };
+                                    
+                                    // Simple word extraction without coordinates as fallback
                                     if (!string.IsNullOrEmpty(pageText))
                                     {
-                                        var docText = new SnipperCloneCleanFinal.UI.DocumentText
-                                        {
-                                            PageNumber = pageIndex + 1,
-                                            FullText = pageText
-                                        };
-
-                                        // Split into words and create bounding boxes
                                         var words = pageText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-                                        int x = 50, y = 50;
+                                        int x = 50, y = 100;
                                         
                                         foreach (var word in words)
                                         {
-                                            if (!string.IsNullOrWhiteSpace(word))
+                                            var cleanWord = word.Trim();
+                                            if (!string.IsNullOrWhiteSpace(cleanWord))
                                             {
-                                                var cleanWord = word.Trim();
-                                                docText.Words.Add(new SnipperCloneCleanFinal.UI.TextWord
+                                                docText.Words.Add(new TextWord
                                                 {
                                                     Text = cleanWord,
                                                     Bounds = new System.Drawing.Rectangle(x, y, cleanWord.Length * 8, 16)
                                                 });
                                                 
-                                                x += cleanWord.Length * 8 + 5;
-                                                if (x > 500) // Wrap to next line
-                                                {
-                                                    x = 50;
-                                                    y += 20;
-                                                }
+                                                x += cleanWord.Length * 8 + 10;
+                                                if (x > 600) { x = 50; y += 20; }
                                             }
                                         }
-                                        
-                                        documentTexts.Add(docText);
-                                        Logger.Info($"Extracted {words.Length} words from page {pageIndex + 1}");
                                     }
+                                    
+                                    documentTexts.Add(docText);
                                 }
-                                catch (Exception pageEx)
-                                {
-                                    Logger.Error($"Failed to extract text from page {pageIndex + 1}: {pageEx.Message}");
-                                }
+                                
+                                Logger.Info($"Fallback extraction completed: {documentTexts.Count} pages");
                             }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Error($"PdfiumViewer extraction failed: {ex.Message}");
+                        catch (Exception fallbackEx)
+                        {
+                            Logger.Error($"Fallback extraction also failed: {fallbackEx.Message}");
+                        }
                     }
                 }
 
-                // If no PDF text found, try extracting from the rendered bitmaps
-                if (documentTexts.Count == 0 && document.Pages.Count > 0)
+                // If still no text extracted, ensure we have at least one page for the UI
+                if (documentTexts.Count == 0)
                 {
-                    try
+                    Logger.Info("No text extracted, creating minimal page structure");
+                    for (int i = 1; i <= Math.Max(1, document.PageCount); i++)
                     {
-                        // Use basic OCR on the first few pages
-                        using (var engine = new TesseractEngine(@".\tessdata", "eng", EngineMode.Default))
+                        documentTexts.Add(new DocumentText
                         {
-                            for (int pageIndex = 0; pageIndex < Math.Min(document.Pages.Count, 3); pageIndex++)
-                            {
-                                var page = document.Pages[pageIndex];
-                                if (page != null)
-                                {
-                                    using (var img = PixConverter.ToPix(page))
-                                    {
-                                        using (var tesseractPage = engine.Process(img))
-                                        {
-                                            var extractedText = tesseractPage.GetText();
-                                            if (!string.IsNullOrEmpty(extractedText))
-                                            {
-                                                var docText = new SnipperCloneCleanFinal.UI.DocumentText
-                                                {
-                                                    PageNumber = pageIndex + 1,
-                                                    FullText = extractedText
-                                                };
-
-                                                var words = extractedText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-                                                int x = 50, y = 50;
-                                                
-                                                foreach (var word in words)
-                                                {
-                                                    var cleanWord = word.Trim();
-                                                    if (!string.IsNullOrWhiteSpace(cleanWord))
-                                                    {
-                                                        docText.Words.Add(new SnipperCloneCleanFinal.UI.TextWord
-                                                        {
-                                                            Text = cleanWord,
-                                                            Bounds = new System.Drawing.Rectangle(x, y, cleanWord.Length * 8, 16)
-                                                        });
-                                                        
-                                                        x += cleanWord.Length * 8 + 5;
-                                                        if (x > 500)
-                                                        {
-                                                            x = 50;
-                                                            y += 20;
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                documentTexts.Add(docText);
-                                                Logger.Info($"OCR extracted {words.Length} words from page {pageIndex + 1}");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Error($"OCR extraction failed: {ex.Message}");
+                            PageNumber = i,
+                            FullText = "",
+                            Words = new List<TextWord>()
+                        });
                     }
                 }
 
                 _documentTexts[documentPath] = documentTexts;
                 var totalWords = documentTexts.Sum(dt => dt.Words.Count);
-                Logger.Info($"REAL text extraction completed for {documentPath}: {totalWords} words extracted");
+                Logger.Info($"Text extraction completed for {documentPath}: {totalWords} words with REAL coordinates across {documentTexts.Count} pages");
                 
-                // Update UI
+                // Update UI on main thread
                 if (this.InvokeRequired)
                 {
                     this.Invoke(new Action(() =>
                     {
-                        _statusLabel.Text = $"Extracted {totalWords} words from {Path.GetFileName(documentPath)} - ready for search";
+                        _statusLabel.Text = $"Text extracted with REAL coordinates: {totalWords} words, {documentTexts.Count} pages - Ready for search";
                     }));
                 }
             }
             catch (Exception ex)
             {
-                Logger.Error($"Text extraction completely failed for {documentPath}: {ex.Message}");
-                _documentTexts[documentPath] = new List<SnipperCloneCleanFinal.UI.DocumentText>();
+                Logger.Error($"Text extraction failed for {documentPath}: {ex.Message}");
+                // Ensure we have at least basic structure
+                var document = _loadedDocuments.FirstOrDefault(d => d.FilePath == documentPath);
+                var pageCount = document?.PageCount ?? 1;
+                
+                _documentTexts[documentPath] = Enumerable.Range(1, pageCount)
+                    .Select(i => new DocumentText { PageNumber = i, FullText = "", Words = new List<TextWord>() })
+                    .ToList();
             }
+        }
+
+        private void OnSearchTextChanged(object sender, EventArgs e)
+        {
+            // Debounce search as user types for smooth experience
+            _searchDebounceTimer.Stop();
+            var searchTerm = _searchTextBox.Text?.Trim();
+            
+            if (string.IsNullOrEmpty(searchTerm))
+            {
+                ClearSearch();
+                return;
+            }
+            
+            // Only search if term has changed and is at least 2 characters
+            if (searchTerm != _lastSearchTerm && searchTerm.Length >= 2)
+            {
+                _searchDebounceTimer.Start();
+            }
+        }
+
+        private void OnSearchDebounceTimer(object sender, EventArgs e)
+        {
+            _searchDebounceTimer.Stop();
+            PerformSearchAsync();
         }
 
         private void OnSearch(object sender, EventArgs e)
         {
-            PerformSearch();
+            _searchDebounceTimer.Stop();
+            PerformSearchAsync();
         }
 
         private void OnSearchTextKeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
-                PerformSearch();
+                _searchDebounceTimer.Stop();
+                PerformSearchAsync();
                 e.Handled = true;
             }
             else if (e.KeyCode == Keys.Escape)
@@ -3290,7 +3660,7 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
 
-        private void PerformSearch()
+        private async void PerformSearchAsync()
         {
             var searchTerm = _searchTextBox.Text?.Trim();
             if (string.IsNullOrEmpty(searchTerm))
@@ -3299,100 +3669,179 @@ namespace SnipperCloneCleanFinal.UI
                 return;
             }
 
-            Logger.Info($"Starting REAL search for: '{searchTerm}'");
-            _statusLabel.Text = $"Searching for '{searchTerm}'...";
+            // Prevent multiple concurrent searches
+            if (_isSearching)
+                return;
+
+            _isSearching = true;
+            _lastSearchTerm = searchTerm;
+
+            // Show loading indicator
+            _statusLabel.Text = $"🔍 Searching for '{searchTerm}'...";
+            _searchBtn.Enabled = false;
+            this.Cursor = Cursors.WaitCursor;
+
+            Logger.Info($"Starting comprehensive search for: '{searchTerm}'");
             _searchResults.Clear();
             _currentSearchResultIndex = -1;
 
-            // Force extraction and search synchronously
-            Task.Run(async () =>
+            // Run search on background thread to keep UI responsive
+            await Task.Run(async () =>
             {
-                var allResults = new List<SnipperCloneCleanFinal.UI.SearchResult>();
+                var allResults = new List<SearchResult>();
 
                 foreach (var document in _loadedDocuments)
                 {
-                    // Ensure text is extracted
+                    Logger.Info($"Searching document: {Path.GetFileName(document.FilePath)}");
+                    
+                    // Ensure text is extracted for this document
                     if (!_documentTexts.ContainsKey(document.FilePath))
                     {
+                        Logger.Info($"Extracting text for search: {document.FilePath}");
                         await ExtractDocumentTextAsync(document.FilePath);
                     }
 
                     // Search in extracted text
-                    if (_documentTexts.ContainsKey(document.FilePath))
+                    if (_documentTexts.TryGetValue(document.FilePath, out var documentTexts))
                     {
-                        var documentTexts = _documentTexts[document.FilePath];
                         Logger.Info($"Searching {documentTexts.Count} pages in {Path.GetFileName(document.FilePath)}");
 
                         foreach (var pageText in documentTexts)
                         {
-                            // Search full page text
-                            if (!string.IsNullOrEmpty(pageText.FullText) && 
-                                pageText.FullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                Logger.Info($"Found '{searchTerm}' in page {pageText.PageNumber} full text");
-                                
-                                // Find approximate position in text
-                                int index = pageText.FullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
-                                int lineNum = pageText.FullText.Substring(0, index).Count(c => c == '\n');
-                                
-                                allResults.Add(new SnipperCloneCleanFinal.UI.SearchResult
-                                {
-                                    DocumentPath = document.FilePath,
-                                    PageNumber = pageText.PageNumber,
-                                    Word = new SnipperCloneCleanFinal.UI.TextWord
-                                    {
-                                        Text = searchTerm,
-                                        Bounds = new System.Drawing.Rectangle(100, 100 + (lineNum * 20), searchTerm.Length * 10, 20)
-                                    },
-                                    SearchTerm = searchTerm
-                                });
-                            }
+                            if (string.IsNullOrEmpty(pageText.FullText))
+                                continue;
 
-                            // Search individual words
+                            Logger.Info($"Searching page {pageText.PageNumber}: {pageText.FullText.Length} characters, {pageText.Words.Count} words");
+                            
+                            // Search in full page text to find ALL occurrences with REAL coordinates
+                            var fullText = pageText.FullText;
+                            int searchIndex = 0;
+                            int occurrenceCount = 0;
+                            
+                            while (searchIndex < fullText.Length)
+                            {
+                                int foundIndex = fullText.IndexOf(searchTerm, searchIndex, StringComparison.OrdinalIgnoreCase);
+                                if (foundIndex == -1) break;
+                                
+                                occurrenceCount++;
+                                
+                                // Try to find a word that contains this match for REAL coordinates
+                                TextWord matchingWord = null;
+                                foreach (var word in pageText.Words)
+                                {
+                                    if (word.Text.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        matchingWord = word;
+                                        break;
+                                    }
+                                }
+                                
+                                if (matchingWord != null)
+                                {
+                                    // Use REAL coordinates from word extraction
+                                    allResults.Add(new SearchResult
+                                    {
+                                        DocumentPath = document.FilePath,
+                                        PageNumber = pageText.PageNumber,
+                                        Word = new TextWord
+                                        {
+                                            Text = searchTerm,
+                                            Bounds = matchingWord.Bounds // REAL coordinates!
+                                        },
+                                        SearchTerm = searchTerm
+                                    });
+                                    
+                                    Logger.Info($"FOUND occurrence #{occurrenceCount} of '{searchTerm}' on page {pageText.PageNumber} at REAL coordinates {matchingWord.Bounds}");
+                                }
+                                else
+                                {
+                                    // Fallback only if no word match found
+                                    var bounds = new System.Drawing.Rectangle(
+                                        50, 100 + (occurrenceCount * 20), searchTerm.Length * 10, 18
+                                    );
+                                    
+                                    allResults.Add(new SearchResult
+                                    {
+                                        DocumentPath = document.FilePath,
+                                        PageNumber = pageText.PageNumber,
+                                        Word = new TextWord
+                                        {
+                                            Text = searchTerm,
+                                            Bounds = bounds
+                                        },
+                                        SearchTerm = searchTerm
+                                    });
+                                }
+                                
+                                searchIndex = foundIndex + 1; // Continue searching after this match
+                            }
+                            
+                            // Also search individual words for additional matches with REAL coordinates
                             foreach (var word in pageText.Words)
                             {
                                 if (word.Text.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
                                 {
-                                    Logger.Info($"Found '{searchTerm}' in word: '{word.Text}' on page {pageText.PageNumber}");
+                                    // Check if we already have a result at exactly these coordinates
+                                    bool isDuplicate = allResults.Any(r => 
+                                        r.DocumentPath == document.FilePath && 
+                                        r.PageNumber == pageText.PageNumber &&
+                                        r.Word.Bounds.X == word.Bounds.X &&
+                                        r.Word.Bounds.Y == word.Bounds.Y);
                                     
-                                    allResults.Add(new SnipperCloneCleanFinal.UI.SearchResult
+                                    if (!isDuplicate)
                                     {
-                                        DocumentPath = document.FilePath,
-                                        PageNumber = pageText.PageNumber,
-                                        Word = word,
-                                        SearchTerm = searchTerm
-                                    });
+                                        allResults.Add(new SearchResult
+                                        {
+                                            DocumentPath = document.FilePath,
+                                            PageNumber = pageText.PageNumber,
+                                            Word = word,
+                                            SearchTerm = searchTerm
+                                        });
+                                        
+                                        Logger.Info($"FOUND '{searchTerm}' in word '{word.Text}' on page {pageText.PageNumber} at REAL coordinates {word.Bounds}");
+                                    }
                                 }
                             }
                         }
                     }
+                    else
+                    {
+                        Logger.Warning($"No text data found for document: {document.FilePath}");
+                    }
 
-                    // Also search filename
+                    // Search filename
                     var fileName = Path.GetFileNameWithoutExtension(document.FilePath);
                     if (fileName.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         Logger.Info($"Found '{searchTerm}' in filename: {fileName}");
                         
-                        allResults.Add(new SnipperCloneCleanFinal.UI.SearchResult
+                        allResults.Add(new SearchResult
                         {
                             DocumentPath = document.FilePath,
                             PageNumber = 1,
-                            Word = new SnipperCloneCleanFinal.UI.TextWord
+                            Word = new TextWord
                             {
                                 Text = fileName,
-                                Bounds = new System.Drawing.Rectangle(0, 0, fileName.Length * 8, 20)
+                                Bounds = new System.Drawing.Rectangle(10, 10, fileName.Length * 8, 20)
                             },
                             SearchTerm = searchTerm
                         });
                     }
                 }
 
-                Logger.Info($"Search completed. Found {allResults.Count} total results for '{searchTerm}'");
+                // Sort results by document, then page, then position
+                allResults = allResults.OrderBy(r => r.DocumentPath)
+                                     .ThenBy(r => r.PageNumber)
+                                     .ThenBy(r => r.Word.Bounds.Y)
+                                     .ThenBy(r => r.Word.Bounds.X)
+                                     .ToList();
 
-                // Update UI on main thread
-                if (this.InvokeRequired)
+                Logger.Info($"Search completed. Found {allResults.Count} total results for '{searchTerm}' across all documents");
+
+                // Update UI on main thread with smooth animations
+                Action updateUI = () =>
                 {
-                    this.Invoke(new Action(() =>
+                    try
                     {
                         _searchResults.Clear();
                         _searchResults.AddRange(allResults);
@@ -3401,37 +3850,34 @@ namespace SnipperCloneCleanFinal.UI
                         if (_searchResults.Count > 0)
                         {
                             _currentSearchResultIndex = 0;
+                            _statusLabel.Text = $"✅ Found {_searchResults.Count} matches for '{searchTerm}'";
                             NavigateToSearchResult(_searchResults[0]);
-                            _statusLabel.Text = $"Found {_searchResults.Count} matches for '{searchTerm}'";
                         }
                         else
                         {
-                            _statusLabel.Text = $"No results found for '{searchTerm}'";
+                            _statusLabel.Text = $"❌ No results found for '{searchTerm}'";
                         }
 
                         UpdateSearchUI();
                         SafeInvalidate();
-                    }));
+                        Logger.Info($"UI updated: {_searchResults.Count} search results ready for display");
+                    }
+                    finally
+                    {
+                        // Reset UI state
+                        _isSearching = false;
+                        _searchBtn.Enabled = true;
+                        this.Cursor = Cursors.Default;
+                    }
+                };
+
+                if (this.InvokeRequired)
+                {
+                    this.Invoke(updateUI);
                 }
                 else
                 {
-                    _searchResults.Clear();
-                    _searchResults.AddRange(allResults);
-                    _isSearchMode = _searchResults.Count > 0;
-                    
-                    if (_searchResults.Count > 0)
-                    {
-                        _currentSearchResultIndex = 0;
-                        NavigateToSearchResult(_searchResults[0]);
-                        _statusLabel.Text = $"Found {_searchResults.Count} matches for '{searchTerm}'";
-                    }
-                    else
-                    {
-                        _statusLabel.Text = $"No results found for '{searchTerm}'";
-                    }
-
-                    UpdateSearchUI();
-                    SafeInvalidate();
+                    updateUI();
                 }
             });
         }
@@ -3451,24 +3897,84 @@ namespace SnipperCloneCleanFinal.UI
             UpdateSearchUI();
         }
 
-        private void NavigateToSearchResult(SnipperCloneCleanFinal.UI.SearchResult result)
+        private void NavigateToSearchResult(SearchResult result)
         {
+            if (result?.Word == null) return;
+
+            // Invalidate previous highlight region first for smooth transition
+            if (_currentSearchResultIndex >= 0 && _currentSearchResultIndex < _searchResults.Count)
+            {
+                var prevResult = _searchResults[_currentSearchResultIndex];
+                if (prevResult?.Word != null && 
+                    prevResult.PageNumber - 1 == _currentPageIndex && 
+                    prevResult.DocumentPath == _currentDocument?.FilePath)
+                {
+                    var prevScaledBounds = new System.Drawing.Rectangle(
+                        (int)(prevResult.Word.Bounds.X * _zoomFactor),
+                        (int)(prevResult.Word.Bounds.Y * _zoomFactor),
+                        (int)(prevResult.Word.Bounds.Width * _zoomFactor),
+                        (int)(prevResult.Word.Bounds.Height * _zoomFactor)
+                    );
+                    SafeInvalidateRegion(prevScaledBounds);
+                }
+            }
+
             // Switch to the correct document if needed
+            bool documentChanged = false;
             var targetDocument = _loadedDocuments.FirstOrDefault(d => d.FilePath == result.DocumentPath);
             if (targetDocument != null && targetDocument != _currentDocument)
             {
                 _currentDocument = targetDocument;
                 _documentSelector.SelectedIndex = _loadedDocuments.IndexOf(targetDocument);
+                documentChanged = true;
             }
 
             // Navigate to the correct page
-            if (result.PageNumber - 1 != _currentPageIndex)
+            bool pageChanged = result.PageNumber - 1 != _currentPageIndex;
+            if (pageChanged)
             {
                 _currentPageIndex = result.PageNumber - 1;
             }
 
-            DisplayCurrentPageWithCentering();
-            SafeInvalidate();
+            // Only refresh page if document or page changed
+            if (documentChanged || pageChanged)
+            {
+                DisplayCurrentPageWithCentering();
+            }
+            
+            // Center the viewport on the found text for better user experience
+            if (result.Word.Bounds.Width > 0 && result.Word.Bounds.Height > 0)
+            {
+                var scaledBounds = new System.Drawing.Rectangle(
+                    (int)(result.Word.Bounds.X * _zoomFactor),
+                    (int)(result.Word.Bounds.Y * _zoomFactor),
+                    (int)(result.Word.Bounds.Width * _zoomFactor),
+                    (int)(result.Word.Bounds.Height * _zoomFactor)
+                );
+                
+                // Calculate center point of the found text
+                var centerPoint = new Point(
+                    scaledBounds.X + scaledBounds.Width / 2,
+                    scaledBounds.Y + scaledBounds.Height / 2
+                );
+                
+                // Center the viewport on this point
+                SetViewportCenterPoint(centerPoint);
+
+                // Use region invalidation for smoother highlighting when staying on same page
+                if (!documentChanged && !pageChanged)
+                {
+                    SafeInvalidateRegion(scaledBounds);
+                }
+                else
+                {
+                    SafeInvalidate(); // Full invalidate for page/document changes
+                }
+            }
+            else
+            {
+                SafeInvalidate();
+            }
         }
 
         private void UpdateSearchUI()
@@ -3527,5 +4033,16 @@ namespace SnipperCloneCleanFinal.UI
     {
         PDF,
         Image
+    }
+    
+    public class SnipRecord
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public System.Drawing.Rectangle Bounds { get; set; }
+        public Color Color { get; set; }
+        public int PageIndex { get; set; }
+        public SnipMode SnipMode { get; set; }
+        public string DocumentPath { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
 } 

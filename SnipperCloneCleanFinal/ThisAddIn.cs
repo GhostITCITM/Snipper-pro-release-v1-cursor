@@ -318,40 +318,74 @@ namespace SnipperCloneCleanFinal
         {
             try
             {
-                // Create a larger, more visible bitmap for the icon (48x48 pixels for ribbon)
+                // Create a larger, more professional bitmap for the ribbon icon (48x48 pixels)
                 using (var bitmap = new System.Drawing.Bitmap(48, 48, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
                 {
                     using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
                     {
-                        // Set high quality rendering
+                        // Set high quality rendering for professional appearance
                         graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                         graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
                         
-                        // Clear with white background for better visibility
-                        graphics.Clear(System.Drawing.Color.White);
+                        // Clear with transparent background
+                        graphics.Clear(System.Drawing.Color.Transparent);
                         
-                        // Draw a larger, more visible colored rectangle
-                        using (var brush = new System.Drawing.SolidBrush(color))
+                        // Create a DataSnipper-style colored square with rounded corners and gradient
+                        var rect = new System.Drawing.Rectangle(6, 6, 36, 36);
+                        
+                        // Create gradient brush for 3D effect like DataSnipper
+                        using (var gradientBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
+                            rect, 
+                            System.Drawing.Color.FromArgb(255, color.R + Math.Min(30, 255 - color.R), color.G + Math.Min(30, 255 - color.G), color.B + Math.Min(30, 255 - color.B)), 
+                            System.Drawing.Color.FromArgb(255, Math.Max(0, color.R - 40), Math.Max(0, color.G - 40), Math.Max(0, color.B - 40)),
+                            System.Drawing.Drawing2D.LinearGradientMode.Vertical))
                         {
-                            // Create a larger rectangle with less padding
-                            var rect = new System.Drawing.Rectangle(8, 8, 32, 32);
-                            graphics.FillRectangle(brush, rect);
-                            
-                            // Add a darker border for better definition
-                            using (var pen = new System.Drawing.Pen(System.Drawing.Color.Black, 2))
+                            // Create rounded rectangle path
+                            using (var path = new System.Drawing.Drawing2D.GraphicsPath())
                             {
-                                graphics.DrawRectangle(pen, rect);
+                                int radius = 6; // Rounded corner radius
+                                path.AddArc(rect.X, rect.Y, radius, radius, 180, 90);
+                                path.AddArc(rect.X + rect.Width - radius, rect.Y, radius, radius, 270, 90);
+                                path.AddArc(rect.X + rect.Width - radius, rect.Y + rect.Height - radius, radius, radius, 0, 90);
+                                path.AddArc(rect.X, rect.Y + rect.Height - radius, radius, radius, 90, 90);
+                                path.CloseAllFigures();
+                                
+                                // Fill with gradient
+                                graphics.FillPath(gradientBrush, path);
+                                
+                                // Add subtle border with darker shade
+                                using (var borderPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(180, Math.Max(0, color.R - 60), Math.Max(0, color.G - 60), Math.Max(0, color.B - 60)), 1.5f))
+                                {
+                                    graphics.DrawPath(borderPen, path);
+                                }
+                                
+                                // Add subtle inner highlight for depth (DataSnipper style)
+                                using (var highlightPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(80, 255, 255, 255), 1))
+                                {
+                                    var innerRect = new System.Drawing.Rectangle(rect.X + 2, rect.Y + 2, rect.Width - 4, rect.Height - 4);
+                                    using (var innerPath = new System.Drawing.Drawing2D.GraphicsPath())
+                                    {
+                                        int innerRadius = 4;
+                                        innerPath.AddArc(innerRect.X, innerRect.Y, innerRadius, innerRadius, 180, 90);
+                                        innerPath.AddArc(innerRect.X + innerRect.Width - innerRadius, innerRect.Y, innerRadius, innerRadius, 270, 90);
+                                        innerPath.AddArc(innerRect.X + innerRect.Width - innerRadius, innerRect.Y + innerRect.Height - innerRadius, innerRadius, innerRadius, 0, 90);
+                                        innerPath.AddArc(innerRect.X, innerRect.Y + innerRect.Height - innerRadius, innerRadius, innerRadius, 90, 90);
+                                        innerPath.CloseAllFigures();
+                                        graphics.DrawPath(highlightPen, innerPath);
+                                    }
+                                }
                             }
                         }
                     }
                     
-                    // Use a simpler approach to create the IPictureDisp
+                    // Convert to IPictureDisp for ribbon
                     return ConvertBitmapToIPicture(bitmap);
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error creating icon: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error creating DataSnipper-style icon: {ex.Message}");
                 return null;
             }
         }
