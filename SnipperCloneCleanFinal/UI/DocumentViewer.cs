@@ -428,16 +428,6 @@ namespace SnipperCloneCleanFinal.UI
             {
                 Logger.Info($"Converting PDF to images: {pdfPath}");
                 
-                // Ensure PDFium is loaded before attempting to use PdfiumViewer
-                if (!PdfiumManager.IsLoaded)
-                {
-                    Logger.Info("PDFium not loaded, attempting to initialize...");
-                    if (!PdfiumManager.Initialize())
-                    {
-                        throw new InvalidOperationException("PDFium could not be loaded. PDF rendering is not available.");
-                    }
-                }
-                
                 // Use PdfiumViewer to render real PDF pages into bitmaps
                 using (var document = PdfiumViewer.PdfDocument.Load(pdfPath))
                 {
@@ -1526,9 +1516,9 @@ namespace SnipperCloneCleanFinal.UI
                         _statusLabel.Text = $"✓ Table snip completed: {lines.Length} rows × {columns} columns extracted to Excel";
                     }
                     else
-                    {
-                        var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
-                        _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
+                {
+                    var preview = extractedValue.Length > 30 ? extractedValue.Substring(0, 30) + "..." : extractedValue;
+                    _statusLabel.Text = $"✓ {_currentSnipMode} snip completed: {preview}";
                     }
                 }
                 else
@@ -1848,6 +1838,20 @@ namespace SnipperCloneCleanFinal.UI
             Task.Run(async () => await LoadDocuments(new[] { filePath }));
             return true;
         }
+        
+        public void NavigateToPage(int pageNumber)
+        {
+            if (_currentDocument != null && pageNumber > 0 && pageNumber <= _currentDocument.PageCount)
+            {
+                _currentPageIndex = pageNumber - 1; // Convert to 0-based index
+                DisplayCurrentPage();
+                Logger.Info($"Navigated to page {pageNumber}");
+            }
+            else
+            {
+                Logger.Warning($"Cannot navigate to page {pageNumber} - invalid page number or no document loaded");
+            }
+        }
 
         protected override void Dispose(bool disposing)
         {
@@ -2030,7 +2034,7 @@ namespace SnipperCloneCleanFinal.UI
         {
             try
             {
-                var sortedDividers = columnDividers.OrderBy(c => c.X).ToList();
+            var sortedDividers = columnDividers.OrderBy(c => c.X).ToList();
                 var columnTexts = new List<List<string>>();
                 
                 // Define column boundaries (left edge, divider positions, right edge)
@@ -2055,8 +2059,8 @@ namespace SnipperCloneCleanFinal.UI
                     var columnWidth = columnRight - columnLeft;
                     
                     if (columnWidth > 5) // Minimum column width
-                    {
-                        var columnRect = new System.Drawing.Rectangle(
+                {
+                    var columnRect = new System.Drawing.Rectangle(
                             columnLeft, tableArea.Y, columnWidth, tableArea.Height);
                         
                         string columnText = "";
@@ -2074,8 +2078,8 @@ namespace SnipperCloneCleanFinal.UI
                             using (var columnImage = CropImageFromDisplayed(pageImage, columnRect))
                             {
                                 if (columnImage != null && _ocrEngine.Initialize())
-                                {
-                                    var ocrResult = _ocrEngine.RecognizeText(columnImage);
+                        {
+                            var ocrResult = _ocrEngine.RecognizeText(columnImage);
                                     if (ocrResult.Success)
                                     {
                                         columnText = ocrResult.Text;
@@ -2301,39 +2305,37 @@ namespace SnipperCloneCleanFinal.UI
             
             return result.ToArray();
         }
-        
+
         // PInvoke declarations for PDFium functions
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr LoadLibrary(string dllToLoad);
+        
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
         
         static DocumentViewer()
         {
-            // Initialize PDFium using the comprehensive manager
+            // Try to set DLL directory to the current application directory
             try
             {
-                Logger.Info("Initializing PDFium for DocumentViewer...");
-                bool success = PdfiumManager.Initialize();
+                var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                SetDllDirectory(appDir);
                 
-                if (success)
+                // Try to preload the PDFium library
+                var pdfiumPath = System.IO.Path.Combine(appDir, "pdfium.dll");
+                if (System.IO.File.Exists(pdfiumPath))
                 {
-                    Logger.Info($"PDFium initialized successfully from: {PdfiumManager.GetLoadedPath()}");
-                    
-                    // Test PDFium functions
-                    if (PdfiumManager.TestPdfiumFunctions())
-                    {
-                        Logger.Info("PDFium function test passed - ready for PDF rendering");
-                    }
-                    else
-                    {
-                        Logger.Error("PDFium function test failed - PDF rendering may not work");
-                    }
+                    LoadLibrary(pdfiumPath);
+                    Logger.Info($"Successfully preloaded pdfium.dll from {pdfiumPath}");
                 }
                 else
                 {
-                    Logger.Error("PDFium initialization failed - PDF rendering will not work");
+                    Logger.Info($"pdfium.dll not found at {pdfiumPath}");
                 }
             }
             catch (Exception ex)
             {
-                Logger.Error($"Critical error initializing PDFium: {ex.Message}", ex);
+                Logger.Error($"Failed to preload pdfium.dll: {ex.Message}", ex);
             }
         }
         

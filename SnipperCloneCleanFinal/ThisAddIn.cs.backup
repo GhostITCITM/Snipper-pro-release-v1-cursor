@@ -55,8 +55,23 @@ namespace SnipperCloneCleanFinal
 
                     _snippEngine = new SnipEngine(_application);
                     
-                    // Register Excel defined names for DS formulas - critical for validation/exception snips
-                    RegisterDSNames();
+                    // Safely try to register Excel defined names for DS formulas
+                    try
+                    {
+                        if (_application != null && _application.Names != null)
+                        {
+                            Application.Names.Add("DS.TEXTS", "=SnipperPro.Connect.TEXTS");
+                            Application.Names.Add("DS.SUMS", "=SnipperPro.Connect.SUMS");
+                            Application.Names.Add("DS.TABLE", "=SnipperPro.Connect.TABLE");
+                            Application.Names.Add("DS.VALIDATION", "=SnipperPro.Connect.VALIDATION");
+                            Application.Names.Add("DS.EXCEPTION", "=SnipperPro.Connect.EXCEPTION");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Snipper Pro: Could not register defined names: {ex.Message}");
+                        // Continue without defined names - they're not critical for basic functionality
+                    }
                     
                     // Safely try to register event handlers
                     try
@@ -317,110 +332,6 @@ namespace SnipperCloneCleanFinal
             }
         }
 
-        private void RegisterDSNames()
-        {
-            try
-            {
-                if (_application?.Names == null)
-                {
-                    System.Diagnostics.Debug.WriteLine("Cannot register DS names - Application or Names collection is null");
-                    return;
-                }
-
-                System.Diagnostics.Debug.WriteLine("Registering DS defined names...");
-
-                // Remove existing DS names first to avoid conflicts
-                string[] dsNames = { "DS.TEXTS", "DS.SUMS", "DS.TABLE", "DS.VALIDATION", "DS.EXCEPTION" };
-                foreach (var name in dsNames)
-                {
-                    try
-                    {
-                        var existingName = _application.Names.Item(name);
-                        if (existingName != null)
-                        {
-                            existingName.Delete();
-                            System.Diagnostics.Debug.WriteLine($"Removed existing name: {name}");
-                        }
-                    }
-                    catch { /* Name doesn't exist, that's fine */ }
-                }
-
-                // Register DS names with proper error handling
-                RegisterDSName("DS.TEXTS", "SnipperPro.Connect.TEXTS");
-                RegisterDSName("DS.SUMS", "SnipperPro.Connect.SUMS");
-                RegisterDSName("DS.TABLE", "SnipperPro.Connect.TABLE");
-                RegisterDSName("DS.VALIDATION", "SnipperPro.Connect.VALIDATION");
-                RegisterDSName("DS.EXCEPTION", "SnipperPro.Connect.EXCEPTION");
-
-                System.Diagnostics.Debug.WriteLine("DS defined names registration completed");
-                
-                // Test if our UDF functions are accessible
-                TestUDFFunctions();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in RegisterDSNames: {ex.Message}");
-            }
-        }
-
-        private void RegisterDSName(string shortName, string fullName)
-        {
-            try
-            {
-                // Try direct ProgId.Function format first (most reliable for UDFs)
-                _application.Names.Add(shortName, $"=SnipperPro.Connect.{fullName.Split('.').Last()}");
-                System.Diagnostics.Debug.WriteLine($"Successfully registered {shortName} -> SnipperPro.Connect.{fullName.Split('.').Last()}");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Primary registration failed for {shortName}: {ex.Message}");
-                
-                // Fallback to full name
-                try
-                {
-                    _application.Names.Add(shortName, $"={fullName}");
-                    System.Diagnostics.Debug.WriteLine($"Fallback registration successful for {shortName}");
-                }
-                catch (Exception ex2)
-                {
-                    System.Diagnostics.Debug.WriteLine($"All registration methods failed for {shortName}: {ex2.Message}");
-                }
-            }
-        }
-
-        private void TestUDFFunctions()
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine("Testing UDF function accessibility...");
-                
-                // Test direct function calls
-                var testResult1 = VALIDATION("test-id");
-                var testResult2 = EXCEPTION("test-id");
-                
-                System.Diagnostics.Debug.WriteLine($"Direct VALIDATION call result: {testResult1}");
-                System.Diagnostics.Debug.WriteLine($"Direct EXCEPTION call result: {testResult2}");
-                
-                // Test if Excel can evaluate the formulas
-                try
-                {
-                    var testCell = _application.ActiveSheet.Range["Z100"]; // Use a cell far away
-                    testCell.Formula = "=SnipperPro.Connect.VALIDATION(\"test-id\")";
-                    var cellValue = testCell.Value;
-                    System.Diagnostics.Debug.WriteLine($"Excel evaluation of VALIDATION formula: {cellValue}");
-                    testCell.Clear(); // Clean up
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Excel formula evaluation failed: {ex.Message}");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"UDF function test failed: {ex.Message}");
-            }
-        }
-
         private void SetSnipMode(SnipMode snipMode)
         {
             _currentSnipMode = snipMode;
@@ -563,47 +474,26 @@ namespace SnipperCloneCleanFinal
                 // Insert the value into Excel (except for table which handles its own cells)
                 if (!string.IsNullOrEmpty(displayValue) && e.SnipMode != SnipMode.Table)
                 {
-                                    // For Validation and Exception snips, use the formula to enable double-click navigation
-                // For other snip types, use the value to avoid #NAME? errors
-                if (e.SnipMode == SnipMode.Validation || e.SnipMode == SnipMode.Exception)
-                {
-                    if (!string.IsNullOrEmpty(formula))
+                    // For Validation and Exception snips, use the formula to enable double-click navigation
+                    // For other snip types, use the value to avoid #NAME? errors
+                    if (e.SnipMode == SnipMode.Validation || e.SnipMode == SnipMode.Exception)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Setting validation/exception formula: {formula}");
-                        
-                        try
+                        // Convert the formula to use DS. prefix for proper Excel integration
+                        if (!string.IsNullOrEmpty(formula))
                         {
-                            // Set the formula directly - it should already be in DS.VALIDATION format
-                            activeCell.Formula = formula;
-                            
-                            // Verify the formula was set correctly
-                            var actualFormula = activeCell.Formula as string;
-                            System.Diagnostics.Debug.WriteLine($"Formula after setting: '{actualFormula}'");
-                            System.Diagnostics.Debug.WriteLine($"Cell value displays: '{activeCell.Value}'");
-                            
-                            if (string.IsNullOrEmpty(actualFormula) || !actualFormula.StartsWith("="))
-                            {
-                                System.Diagnostics.Debug.WriteLine("Formula setting failed, DS names not registered properly. Using fallback value.");
-                                activeCell.Value2 = displayValue;
-                            }
+                            var dsFormula = formula.Replace("=SnipperPro.Connect.", "=DS.");
+                            activeCell.Formula = dsFormula;
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            System.Diagnostics.Debug.WriteLine($"Error setting formula: {ex.Message}");
-                            activeCell.Value2 = displayValue;
+                            activeCell.Value2 = displayValue; // Fallback if formula creation failed
                         }
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine("No formula provided, using value");
+                        // Always put the actual value in the cell instead of the formula to avoid #NAME? errors
                         activeCell.Value2 = displayValue;
                     }
-                }
-                else
-                {
-                    // Always put the actual value in the cell instead of the formula to avoid #NAME? errors
-                    activeCell.Value2 = displayValue;
-                }
                     
                     // Add comment with source info and formula for reference
                     try
@@ -693,7 +583,6 @@ namespace SnipperCloneCleanFinal
 
         // Excel UDFs for DataSnipper formulas
         [ComVisible(true)]
-        [System.Runtime.InteropServices.DispId(1)]
         public object TEXTS(string snipId)
         {
             var data = DataSnipperFormulas.GetSnipData(snipId);
@@ -701,7 +590,6 @@ namespace SnipperCloneCleanFinal
         }
 
         [ComVisible(true)]
-        [System.Runtime.InteropServices.DispId(2)]
         public object SUMS(string snipId)
         {
             var data = DataSnipperFormulas.GetSnipData(snipId);
@@ -717,7 +605,6 @@ namespace SnipperCloneCleanFinal
         }
 
         [ComVisible(true)]
-        [System.Runtime.InteropServices.DispId(3)]
         public object TABLE(string snipId)
         {
             var data = DataSnipperFormulas.GetSnipData(snipId);
@@ -739,25 +626,15 @@ namespace SnipperCloneCleanFinal
         }
 
         [ComVisible(true)]
-        [System.Runtime.InteropServices.DispId(4)]
         public object VALIDATION(string snipId)
         {
-            System.Diagnostics.Debug.WriteLine($"VALIDATION UDF called with snipId: {snipId}");
-            var snipData = DataSnipperFormulas.GetSnipData(snipId);
-            var result = snipData != null ? "✓" : "#N/A";
-            System.Diagnostics.Debug.WriteLine($"VALIDATION UDF returning: {result}");
-            return result;
+            return DataSnipperFormulas.GetSnipData(snipId) != null ? "✓" : "#N/A";
         }
 
         [ComVisible(true)]
-        [System.Runtime.InteropServices.DispId(5)]
         public object EXCEPTION(string snipId)
         {
-            System.Diagnostics.Debug.WriteLine($"EXCEPTION UDF called with snipId: {snipId}");
-            var snipData = DataSnipperFormulas.GetSnipData(snipId);
-            var result = snipData != null ? "✗" : "#N/A";
-            System.Diagnostics.Debug.WriteLine($"EXCEPTION UDF returning: {result}");
-            return result;
+            return DataSnipperFormulas.GetSnipData(snipId) != null ? "✗" : "#N/A";
         }
 
         private void OnSheetBeforeDoubleClick(object sh, Excel.Range target, ref bool cancel)
@@ -777,7 +654,7 @@ namespace SnipperCloneCleanFinal
                     return;
                 }
 
-                var match = System.Text.RegularExpressions.Regex.Match(formula, @"=(?:DS\.|SnipperPro\.Connect\.)(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\(""(?<id>[^""]+)""\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var match = System.Text.RegularExpressions.Regex.Match(formula, @"=DS\.(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\(""(?<id>[^""]+)""\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 
                 System.Diagnostics.Debug.WriteLine($"Regex match success: {match.Success}");
                 

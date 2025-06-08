@@ -28,8 +28,12 @@ namespace SnipperCloneCleanFinal
         private SnipEngine _snippEngine;
         private DocumentViewer _documentViewer;
         private SnipMode _currentSnipMode = SnipMode.Text;
+        
+        // Static instance for access from other classes
+        public static ThisAddIn Instance { get; private set; }
 
         public Excel.Application Application => _application;
+        public DocumentViewer DocumentViewer => _documentViewer;
 
         #region IDTExtensibility2 Implementation
         public void OnConnection(object application, ext_ConnectMode connectMode, object addInInst, ref Array custom)
@@ -39,6 +43,7 @@ namespace SnipperCloneCleanFinal
                 lock (_lockObject)
                 {
                     _application = (Excel.Application)application;
+                    Instance = this; // Set static instance for access from other classes
 
                     var user = Environment.GetEnvironmentVariable("SNIPPER_USER") ?? Environment.UserName;
                     var pass = Environment.GetEnvironmentVariable("SNIPPER_PASS") ?? "snipper";
@@ -105,6 +110,7 @@ namespace SnipperCloneCleanFinal
                         Marshal.ReleaseComObject(_application);
                         _application = null;
                     }
+                    Instance = null;
                 }
             }
             catch (Exception ex)
@@ -468,8 +474,26 @@ namespace SnipperCloneCleanFinal
                 // Insert the value into Excel (except for table which handles its own cells)
                 if (!string.IsNullOrEmpty(displayValue) && e.SnipMode != SnipMode.Table)
                 {
-                    // Always put the actual value in the cell instead of the formula to avoid #NAME? errors
-                    activeCell.Value2 = displayValue;
+                    // For Validation and Exception snips, use the formula to enable double-click navigation
+                    // For other snip types, use the value to avoid #NAME? errors
+                    if (e.SnipMode == SnipMode.Validation || e.SnipMode == SnipMode.Exception)
+                    {
+                        // Convert the formula to use DS. prefix for proper Excel integration
+                        if (!string.IsNullOrEmpty(formula))
+                        {
+                            var dsFormula = formula.Replace("=SnipperPro.Connect.", "=DS.");
+                            activeCell.Formula = dsFormula;
+                        }
+                        else
+                        {
+                            activeCell.Value2 = displayValue; // Fallback if formula creation failed
+                        }
+                    }
+                    else
+                    {
+                        // Always put the actual value in the cell instead of the formula to avoid #NAME? errors
+                        activeCell.Value2 = displayValue;
+                    }
                     
                     // Add comment with source info and formula for reference
                     try
@@ -618,19 +642,46 @@ namespace SnipperCloneCleanFinal
             try
             {
                 var formula = target.Formula as string;
-                if (string.IsNullOrWhiteSpace(formula)) return;
+                
+                // Add debugging
+                System.Diagnostics.Debug.WriteLine($"Double-click detected on cell {target.Address}");
+                System.Diagnostics.Debug.WriteLine($"Cell formula: '{formula}'");
+                System.Diagnostics.Debug.WriteLine($"Cell value: '{target.Value}'");
+                
+                if (string.IsNullOrWhiteSpace(formula)) 
+                {
+                    System.Diagnostics.Debug.WriteLine("No formula found in cell - exiting");
+                    return;
+                }
 
-                var match = System.Text.RegularExpressions.Regex.Match(formula, @"=DS\.(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\(""(?<id>[^""]+)""\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var match = System.Text.RegularExpressions.Regex.Match(formula, @"=(?:DS\.|SnipperPro\.Connect\.)(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\(""(?<id>[^""]+)""\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                
+                System.Diagnostics.Debug.WriteLine($"Regex match success: {match.Success}");
+                
                 if (match.Success)
                 {
                     var snipId = match.Groups["id"].Value;
+                    System.Diagnostics.Debug.WriteLine($"Extracted snip ID: {snipId}");
+                    
                     if (DataSnipperFormulas.NavigateToSnip(snipId))
                     {
+                        System.Diagnostics.Debug.WriteLine("Navigation successful - cancelling Excel default action");
                         cancel = true;
                     }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("Navigation failed");
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("Formula didn't match DS pattern");
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in double-click handler: {ex.Message}");
+            }
         }
         #endregion
 

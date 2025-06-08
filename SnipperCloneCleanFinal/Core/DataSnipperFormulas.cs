@@ -80,6 +80,7 @@ namespace SnipperCloneCleanFinal.Core
             };
             
             _snipDatabase[snipId] = snipData;
+            System.Diagnostics.Debug.WriteLine($"Created validation snip: ID={snipId}, Doc={documentPath}, Page={pageNumber}");
             return $"=SnipperPro.Connect.VALIDATION(\"{snipId}\")";
         }
         
@@ -99,6 +100,7 @@ namespace SnipperCloneCleanFinal.Core
             };
             
             _snipDatabase[snipId] = snipData;
+            System.Diagnostics.Debug.WriteLine($"Created exception snip: ID={snipId}, Doc={documentPath}, Page={pageNumber}");
             return $"=SnipperPro.Connect.EXCEPTION(\"{snipId}\")";
         }
         
@@ -109,22 +111,66 @@ namespace SnipperCloneCleanFinal.Core
         
         public static bool NavigateToSnip(string snipId)
         {
+            System.Diagnostics.Debug.WriteLine($"NavigateToSnip called with ID: {snipId}");
+            
             var snipData = GetSnipData(snipId);
-            if (snipData == null) return false;
+            if (snipData == null) 
+            {
+                System.Diagnostics.Debug.WriteLine($"No snip data found for ID: {snipId}");
+                return false;
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"Found snip data: Type={snipData.Type}, Document={snipData.DocumentPath}, Page={snipData.PageNumber}");
             
             try
             {
-                // Open document viewer and navigate to the snip location
-                var viewer = DocumentViewerManager.GetOrCreateViewer();
-                viewer.LoadDocument(snipData.DocumentPath);
-                viewer.NavigateToPage(snipData.PageNumber);
-                viewer.HighlightRegion(snipData.Bounds.ToDrawingRectangle(), GetSnipColor(snipData.Type));
-                viewer.Show();
-                return true;
+                // Get the main document viewer from the add-in
+                System.Diagnostics.Debug.WriteLine("Getting add-in instance...");
+                var addIn = SnipperCloneCleanFinal.ThisAddIn.Instance;
+                
+                if (addIn?.DocumentViewer != null && !addIn.DocumentViewer.IsDisposed)
+                {
+                    System.Diagnostics.Debug.WriteLine("Add-in and document viewer found");
+                    
+                    // Use the main document viewer for navigation
+                    var viewer = addIn.DocumentViewer;
+                    
+                    // Load the document if not already loaded
+                    System.Diagnostics.Debug.WriteLine($"Loading document: {snipData.DocumentPath}");
+                    if (!viewer.LoadDocument(snipData.DocumentPath))
+                    {
+                        Logger.Error($"Failed to load document for snip {snipId}");
+                        System.Diagnostics.Debug.WriteLine("Document loading failed");
+                        return false;
+                    }
+                    
+                    // Navigate to the page and highlight the region
+                    System.Diagnostics.Debug.WriteLine($"Navigating to page {snipData.PageNumber}");
+                    viewer.NavigateToPage(snipData.PageNumber);
+                    
+                    System.Diagnostics.Debug.WriteLine($"Highlighting region: {snipData.Bounds}");
+                    viewer.HighlightRegion(snipData.Bounds.ToDrawingRectangle(), GetSnipColor(snipData.Type));
+                    
+                    // Show and bring to front
+                    System.Diagnostics.Debug.WriteLine("Showing and bringing viewer to front");
+                    viewer.Show();
+                    viewer.BringToFront();
+                    
+                    Logger.Info($"Successfully navigated to snip {snipId} on page {snipData.PageNumber}");
+                    System.Diagnostics.Debug.WriteLine("Navigation completed successfully");
+                    return true;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"Document viewer not available - addIn: {addIn}, viewer: {addIn?.DocumentViewer}, disposed: {addIn?.DocumentViewer?.IsDisposed}");
+                    Logger.Error("Document viewer not available for navigation");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
                 Logger.Error($"Failed to navigate to snip {snipId}: {ex.Message}", ex);
+                System.Diagnostics.Debug.WriteLine($"Exception in NavigateToSnip: {ex.Message}");
                 return false;
             }
         }
