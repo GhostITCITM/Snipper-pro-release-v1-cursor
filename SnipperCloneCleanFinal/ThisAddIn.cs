@@ -625,6 +625,7 @@ namespace SnipperCloneCleanFinal
                 _documentViewer = new DocumentViewer(_snippEngine);
                 _documentViewer.SnipAreaSelected += OnSnipAreaSelected;
                 _documentViewer.SnipMoved += OnSnipMoved;
+                _documentViewer.SnipClicked += OnSnipClicked;
                 Logger.Info("Document viewer initialized with full PDF support");
             }
             catch (Exception ex)
@@ -865,6 +866,18 @@ namespace SnipperCloneCleanFinal
                 if (nums.Count > 0) snipData.Numbers = nums;
             }
             DataSnipperFormulas.UpdateSnip(e.Snip.SnipId, snipData);
+        }
+
+        private void OnSnipClicked(object sender, SnipClickedEventArgs e)
+        {
+            var snipData = DataSnipperFormulas.GetSnipData(e.Snip.SnipId);
+            if (snipData == null || string.IsNullOrEmpty(snipData.CellAddress)) return;
+            try
+            {
+                var cell = Application.Range[snipData.CellAddress];
+                cell.Select();
+            }
+            catch { }
         }
         
         private System.Drawing.Color GetSnipColor(SnipMode snipMode)

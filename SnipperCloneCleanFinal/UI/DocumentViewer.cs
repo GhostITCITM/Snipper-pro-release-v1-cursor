@@ -87,11 +87,13 @@ namespace SnipperCloneCleanFinal.UI
 
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
         public event EventHandler<SnipMovedEventArgs> SnipMoved;
+        public event EventHandler<SnipClickedEventArgs> SnipClicked;
 
         private SnipRecord _draggingSnip;
         private SnipRecord _resizingSnip;
         private ResizeHandle _resizeHandle = ResizeHandle.None;
         private Point _dragStart;
+        private bool _draggedDuringClick = false;
 
         private const int HANDLE_SIZE = 6; // px for resize handles
 
@@ -1141,6 +1143,8 @@ namespace SnipperCloneCleanFinal.UI
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
 
+                _draggedDuringClick = false;
+
                 // Handle middle mouse button for panning
                 if (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && !_isSnipMode))
                 {
@@ -1361,9 +1365,11 @@ namespace SnipperCloneCleanFinal.UI
 
                 if (_resizingSnip != null)
                 {
-                    var rect = _resizingSnip.Bounds;
                     int dx = e.X - _dragStart.X;
                     int dy = e.Y - _dragStart.Y;
+                    if (dx != 0 || dy != 0)
+                        _draggedDuringClick = true;
+                    var rect = _resizingSnip.Bounds;
 
                     switch (_resizeHandle)
                     {
@@ -1399,6 +1405,8 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     var dx = e.X - _dragStart.X;
                     var dy = e.Y - _dragStart.Y;
+                    if (dx != 0 || dy != 0)
+                        _draggedDuringClick = true;
                     _draggingSnip.Bounds = new System.Drawing.Rectangle(_draggingSnip.Bounds.X + dx, _draggingSnip.Bounds.Y + dy, _draggingSnip.Bounds.Width, _draggingSnip.Bounds.Height);
                     _dragStart = e.Location;
                     SafeInvalidate();
@@ -1669,7 +1677,10 @@ namespace SnipperCloneCleanFinal.UI
                 if (_resizingSnip != null)
                 {
                     _documentPictureBox.Cursor = Cursors.Default;
-                    SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _resizingSnip });
+                    if (_draggedDuringClick)
+                        SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _resizingSnip });
+                    else
+                        SnipClicked?.Invoke(this, new SnipClickedEventArgs { Snip = _resizingSnip });
                     _resizingSnip = null;
                     _resizeHandle = ResizeHandle.None;
                     return;
@@ -1678,7 +1689,10 @@ namespace SnipperCloneCleanFinal.UI
                 if (_draggingSnip != null)
                 {
                     _documentPictureBox.Cursor = Cursors.Default;
-                    SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _draggingSnip });
+                    if (_draggedDuringClick)
+                        SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _draggingSnip });
+                    else
+                        SnipClicked?.Invoke(this, new SnipClickedEventArgs { Snip = _draggingSnip });
                     _draggingSnip = null;
                     return;
                 }
@@ -4314,6 +4328,11 @@ namespace SnipperCloneCleanFinal.UI
     }
 
     public class SnipMovedEventArgs : EventArgs
+    {
+        public SnipRecord Snip { get; set; }
+    }
+
+    public class SnipClickedEventArgs : EventArgs
     {
         public SnipRecord Snip { get; set; }
     }
