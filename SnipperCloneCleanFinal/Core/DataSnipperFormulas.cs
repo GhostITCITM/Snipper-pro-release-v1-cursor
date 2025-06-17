@@ -10,7 +10,12 @@ namespace SnipperCloneCleanFinal.Core
 {
     public static class DataSnipperFormulas
     {
-        private static Dictionary<string, SnipData> _snipDatabase = new Dictionary<string, SnipData>();
+        private static readonly Dictionary<string, SnipData> _snipDatabase = new Dictionary<string, SnipData>();
+        private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings
+        {
+            Formatting = Formatting.None,
+            NullValueHandling = NullValueHandling.Ignore
+        };
         
         public static string CreateTextFormula(string documentPath, int pageNumber, string extractedText, Rectangle bounds, string cellAddress, out string snipId)
         {
@@ -197,32 +202,41 @@ namespace SnipperCloneCleanFinal.Core
 
         public static void SaveSnips(Excel.Workbook workbook)
         {
+            if (workbook == null) return;
             try
             {
-                var json = JsonConvert.SerializeObject(_snipDatabase);
                 Office.DocumentProperties props = (Office.DocumentProperties)workbook.CustomDocumentProperties;
+                string json = _snipDatabase.Count > 0 ? JsonConvert.SerializeObject(_snipDatabase, JsonSettings) : null;
                 try
                 {
                     var prop = props["SnipperProSnips"];
                     prop.Delete();
                 }
                 catch { }
-                props.Add("SnipperProSnips", false, Office.MsoDocProperties.msoPropertyTypeString, json);
+                if (!string.IsNullOrEmpty(json))
+                {
+                    props.Add("SnipperProSnips", false, Office.MsoDocProperties.msoPropertyTypeString, json);
+                }
             }
             catch { }
         }
 
+
         public static void LoadSnips(Excel.Workbook workbook)
         {
+            if (workbook == null)
+            {
+                _snipDatabase.Clear();
+                return;
+            }
             try
             {
                 Office.DocumentProperties props = (Office.DocumentProperties)workbook.CustomDocumentProperties;
                 var prop = props["SnipperProSnips"];
-                string json = prop.Value as string;
-                if (!string.IsNullOrEmpty(json))
-                {
-                    _snipDatabase = JsonConvert.DeserializeObject<Dictionary<string, SnipData>>(json) ?? new Dictionary<string, SnipData>();
-                }
+                var json = prop.Value as string;
+                _snipDatabase = string.IsNullOrEmpty(json)
+                    ? new Dictionary<string, SnipData>()
+                    : JsonConvert.DeserializeObject<Dictionary<string, SnipData>>(json) ?? new Dictionary<string, SnipData>();
             }
             catch
             {
@@ -230,9 +244,10 @@ namespace SnipperCloneCleanFinal.Core
             }
         }
 
+
         public static void UpdateSnip(string snipId, SnipData updated)
         {
-            if (!_snipDatabase.ContainsKey(snipId)) return;
+            if (!_snipDatabase.TryGetValue(snipId, out _)) return;
             _snipDatabase[snipId] = updated;
             try
             {
@@ -240,14 +255,13 @@ namespace SnipperCloneCleanFinal.Core
                 if (app != null && !string.IsNullOrEmpty(updated.CellAddress))
                 {
                     var cell = app.Range[updated.CellAddress];
-                    if (updated.Type == SnipMode.Sum && double.TryParse(updated.ExtractedValue, out double d))
-                        cell.Value2 = d;
-                    else
-                        cell.Value2 = updated.ExtractedValue;
+                    object val = updated.Type == SnipMode.Sum && double.TryParse(updated.ExtractedValue, out double d) ? (object)d : updated.ExtractedValue;
+                    cell.Value2 = val;
                 }
             }
             catch { }
         }
+
     }
     
     public class SnipData
