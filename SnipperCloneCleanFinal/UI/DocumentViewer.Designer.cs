@@ -18,10 +18,13 @@ namespace SnipperCloneCleanFinal.UI
             this.SuspendLayout();
             // 
             // DocumentViewer
-            // 
+            //
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(800, 600);
+            this.AllowDrop = true;
+            this.DragDrop += new System.Windows.Forms.DragEventHandler(this.OnDragDrop);
+            this.DragEnter += new System.Windows.Forms.DragEventHandler(this.OnDragEnter);
             this.Name = "DocumentViewer";
             this.Text = "Snipper Pro - Document Viewer";
             this.ResumeLayout(false);

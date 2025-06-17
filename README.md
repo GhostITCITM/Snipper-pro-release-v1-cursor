@@ -9,6 +9,8 @@ A powerful Excel add-in for extracting data from PDFs and images, designed to wo
 - **Sum Snip** - Automatically sum numbers in selected areas
 - **PDF & Image Support** - Full PDF rendering plus PNG, JPG, JPEG, BMP, TIFF, GIF
 - **Excel Integration** - Direct output to Excel with proper formatting
+- **Drag-and-Drop Loading** - Drop PDF or image files directly into the viewer
+- **Right-Click Removal** - Remove loaded documents from the list via context menu
 
 ## 📋 Requirements
 
@@ -77,7 +79,7 @@ SnipperCloneCleanFinal/
 
 1. **Open Excel** using `start_excel_with_snipper.bat`
 2. **Click "Load Document"** in the SNIPPER PRO ribbon
-3. **Select PDF or image file**
+3. **Select PDF or image file** or simply **drag and drop** files into the viewer
 4. **Choose extraction mode**: Text, Sum, Table, Validation, Exception
 5. **Draw selection** around the area to extract
 6. **Adjust columns** (Table mode) using + and - buttons

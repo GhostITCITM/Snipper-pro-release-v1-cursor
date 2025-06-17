@@ -138,6 +138,11 @@ namespace SnipperCloneCleanFinal.UI
             // Enable keyboard events
             this.KeyPreview = true;
             this.KeyDown += OnKeyDown;
+
+            // Enable drag-and-drop loading
+            this.AllowDrop = true;
+            this.DragEnter += OnDragEnter;
+            this.DragDrop += OnDragDrop;
             
             // Prevent accidental closing - minimize instead
             this.FormClosing += (s, e) => 
@@ -355,6 +360,11 @@ namespace SnipperCloneCleanFinal.UI
                 AutoScrollMinSize = new Size(1200, 1600) // Ensure scrollbars appear
             };
 
+            // Allow drag-and-drop onto the viewer panel
+            _viewerPanel.AllowDrop = true;
+            _viewerPanel.DragEnter += OnDragEnter;
+            _viewerPanel.DragDrop += OnDragDrop;
+
             // Add mouse wheel support for zooming and scrolling
             _viewerPanel.MouseWheel += OnMouseWheel;
             
@@ -401,11 +411,28 @@ namespace SnipperCloneCleanFinal.UI
                 openFileDialog.Filter = "PDF files (*.pdf)|*.pdf|Image files (*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif|All supported files|*.pdf;*.png;*.jpg;*.jpeg;*.bmp;*.tiff;*.gif|All files (*.*)|*.*";
                 openFileDialog.Title = "Select Document(s) to Load - PDFs and Images Supported";
                 openFileDialog.Multiselect = true;
-                
+
                 if (openFileDialog.ShowDialog() == DialogResult.OK)
                 {
                     await LoadDocuments(openFileDialog.FileNames);
                 }
+            }
+        }
+
+        private void OnDragEnter(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                e.Effect = DragDropEffects.Copy;
+            }
+        }
+
+        private void OnDragDrop(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                _ = LoadDocuments(files);
             }
         }
 
@@ -2524,16 +2551,22 @@ namespace SnipperCloneCleanFinal.UI
                     Location = new Point(10, y),
                     TextAlign = ContentAlignment.MiddleLeft
                 };
-                
+
                 var document = doc; // Capture for closure
-                button.Click += (s, e) => 
+                button.Click += (s, e) =>
                 {
                     _currentDocument = document;
                     _currentPageIndex = 0;
                     _documentSelector.SelectedIndex = _loadedDocuments.IndexOf(document);
                     DisplayCurrentPage();
                 };
-                
+
+                var menu = new ContextMenuStrip();
+                var removeItem = new ToolStripMenuItem("Remove");
+                removeItem.Click += (s, e) => RemoveDocument(document);
+                menu.Items.Add(removeItem);
+                button.ContextMenuStrip = menu;
+
                 _documentsPanel.Controls.Add(button);
                 y += 35;
             }
@@ -2557,6 +2590,23 @@ namespace SnipperCloneCleanFinal.UI
             {
                 Logger.Warning($"Cannot navigate to page {pageNumber} - invalid page number or no document loaded");
             }
+        }
+
+        private void RemoveDocument(LoadedDocument document)
+        {
+            if (document == null) return;
+
+            _loadedDocuments.Remove(document);
+            _documentSelector.Items.Remove(document.Name);
+
+            if (_currentDocument == document)
+            {
+                _currentDocument = _loadedDocuments.FirstOrDefault();
+                _currentPageIndex = 0;
+            }
+
+            UpdateDocumentsList();
+            DisplayCurrentPage();
         }
 
         protected override void Dispose(bool disposing)
