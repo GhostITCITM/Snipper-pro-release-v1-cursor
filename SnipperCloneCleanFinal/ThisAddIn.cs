@@ -842,8 +842,8 @@ namespace SnipperCloneCleanFinal
                 // Highlight the region in the document viewer  
                 _documentViewer.HighlightRegion(e.Bounds, GetSnipColor(e.SnipMode));
                 
-                // Don't reset snip mode - keep it active for continuous snipping
-                // _documentViewer.SetSnipMode(e.SnipMode, false);
+                // Disable snip mode after each snip so the user must re-activate it
+                _documentViewer.SetSnipMode(e.SnipMode, false);
             }
             catch (Exception ex)
             {
