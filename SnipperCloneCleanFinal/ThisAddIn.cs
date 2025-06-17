@@ -65,6 +65,8 @@ namespace SnipperCloneCleanFinal
                         if (_application != null)
                         {
                             ((Excel.AppEvents_Event)_application).SheetBeforeDoubleClick += OnSheetBeforeDoubleClick;
+                            _application.WorkbookBeforeSave += OnWorkbookBeforeSave;
+                            _application.WorkbookOpen += OnWorkbookOpen;
                         }
                     }
                     catch (Exception ex)
@@ -93,6 +95,8 @@ namespace SnipperCloneCleanFinal
                     if (_application != null)
                     {
                         ((Excel.AppEvents_Event)_application).SheetBeforeDoubleClick -= OnSheetBeforeDoubleClick;
+                        _application.WorkbookBeforeSave -= OnWorkbookBeforeSave;
+                        _application.WorkbookOpen -= OnWorkbookOpen;
                         Marshal.ReleaseComObject(_application);
                         _application = null;
                     }
@@ -620,6 +624,7 @@ namespace SnipperCloneCleanFinal
             {
                 _documentViewer = new DocumentViewer(_snippEngine);
                 _documentViewer.SnipAreaSelected += OnSnipAreaSelected;
+                _documentViewer.SnipMoved += OnSnipMoved;
                 Logger.Info("Document viewer initialized with full PDF support");
             }
             catch (Exception ex)
@@ -652,8 +657,10 @@ namespace SnipperCloneCleanFinal
                     case SnipMode.Text:
                         if (e.Success && !string.IsNullOrEmpty(e.ExtractedText))
                         {
-                            formula = DataSnipperFormulas.CreateTextFormula(e.DocumentPath, e.PageNumber, 
-                                e.ExtractedText, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                            formula = DataSnipperFormulas.CreateTextFormula(e.DocumentPath, e.PageNumber,
+                                e.ExtractedText, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height),
+                                activeCell.Address, out var snipId);
+                            _documentViewer.AssignSnipIdToLastRecord(snipId);
                             displayValue = e.ExtractedText;
                         }
                         else
@@ -679,8 +686,10 @@ namespace SnipperCloneCleanFinal
                             
                             if (numbers.Count > 0)
                             {
-                                formula = DataSnipperFormulas.CreateSumFormula(e.DocumentPath, e.PageNumber, 
-                                    sum, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), numbers);
+                                formula = DataSnipperFormulas.CreateSumFormula(e.DocumentPath, e.PageNumber,
+                                    sum, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), numbers,
+                                    activeCell.Address, out var snipId);
+                                _documentViewer.AssignSnipIdToLastRecord(snipId);
                                 displayValue = sum.ToString("F2");
                             }
                             else
@@ -707,7 +716,9 @@ namespace SnipperCloneCleanFinal
                                 }
 
                                 formula = DataSnipperFormulas.CreateTableFormula(e.DocumentPath, e.PageNumber,
-                                    tableData, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                                    tableData, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height),
+                                    activeCell.Address, out var snipId);
+                                _documentViewer.AssignSnipIdToLastRecord(snipId);
                                 activeCell.Formula = formula;
                                 displayValue = $"Table: {tableData.RowCount}×{tableData.ColumnCount}";
                             }
@@ -723,14 +734,16 @@ namespace SnipperCloneCleanFinal
                         break;
                         
                     case SnipMode.Validation:
-                        formula = DataSnipperFormulas.CreateValidationFormula(e.DocumentPath, e.PageNumber, 
-                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                        formula = DataSnipperFormulas.CreateValidationFormula(e.DocumentPath, e.PageNumber,
+                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), activeCell.Address, out var snipId);
+                        _documentViewer.AssignSnipIdToLastRecord(snipId);
                         displayValue = "✓";
                         break;
                         
                     case SnipMode.Exception:
-                        formula = DataSnipperFormulas.CreateExceptionFormula(e.DocumentPath, e.PageNumber, 
-                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height));
+                        formula = DataSnipperFormulas.CreateExceptionFormula(e.DocumentPath, e.PageNumber,
+                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), activeCell.Address, out var snipId);
+                        _documentViewer.AssignSnipIdToLastRecord(snipId);
                         displayValue = "✗";
                         break;
                 }
@@ -838,6 +851,20 @@ namespace SnipperCloneCleanFinal
                 MessageBox.Show($"Error processing snip: {ex.Message}", "Snipper Pro Error", 
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void OnSnipMoved(object sender, SnipMovedEventArgs e)
+        {
+            var snipData = DataSnipperFormulas.GetSnipData(e.Snip.SnipId);
+            if (snipData == null) return;
+            snipData.Bounds = new SnipperCloneCleanFinal.Core.Rectangle(e.Snip.Bounds.X, e.Snip.Bounds.Y, e.Snip.Bounds.Width, e.Snip.Bounds.Height);
+            var text = _documentViewer.ExtractTextForSnip(e.Snip, out var nums);
+            if (!string.IsNullOrEmpty(text))
+            {
+                snipData.ExtractedValue = text;
+                if (nums.Count > 0) snipData.Numbers = nums;
+            }
+            DataSnipperFormulas.UpdateSnip(e.Snip.SnipId, snipData);
         }
         
         private System.Drawing.Color GetSnipColor(SnipMode snipMode)
@@ -980,6 +1007,16 @@ namespace SnipperCloneCleanFinal
             {
                 System.Diagnostics.Debug.WriteLine($"Error in double-click handler: {ex.Message}");
             }
+        }
+
+        private void OnWorkbookBeforeSave(Excel.Workbook wb, bool saveAsUI, ref bool cancel)
+        {
+            DataSnipperFormulas.SaveSnips(wb);
+        }
+
+        private void OnWorkbookOpen(Excel.Workbook wb)
+        {
+            DataSnipperFormulas.LoadSnips(wb);
         }
         #endregion
 
