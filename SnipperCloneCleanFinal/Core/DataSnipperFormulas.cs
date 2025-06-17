@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Newtonsoft.Json;
+using Office = Microsoft.Office.Core;
 using Excel = Microsoft.Office.Interop.Excel;
 using SnipperCloneCleanFinal.Infrastructure;
 
@@ -10,9 +12,9 @@ namespace SnipperCloneCleanFinal.Core
     {
         private static Dictionary<string, SnipData> _snipDatabase = new Dictionary<string, SnipData>();
         
-        public static string CreateTextFormula(string documentPath, int pageNumber, string extractedText, Rectangle bounds)
+        public static string CreateTextFormula(string documentPath, int pageNumber, string extractedText, Rectangle bounds, string cellAddress, out string snipId)
         {
-            var snipId = Guid.NewGuid().ToString();
+            snipId = Guid.NewGuid().ToString();
             var snipData = new SnipData
             {
                 Id = snipId,
@@ -21,16 +23,17 @@ namespace SnipperCloneCleanFinal.Core
                 PageNumber = pageNumber,
                 ExtractedValue = extractedText,
                 Bounds = bounds,
-                Created = DateTime.Now
+                Created = DateTime.Now,
+                CellAddress = cellAddress
             };
             
             _snipDatabase[snipId] = snipData;
             return $"=SnipperPro.Connect.TEXTS(\"{snipId}\")";
         }
         
-        public static string CreateSumFormula(string documentPath, int pageNumber, double sumValue, Rectangle bounds, List<double> numbers)
+        public static string CreateSumFormula(string documentPath, int pageNumber, double sumValue, Rectangle bounds, List<double> numbers, string cellAddress, out string snipId)
         {
-            var snipId = Guid.NewGuid().ToString();
+            snipId = Guid.NewGuid().ToString();
             var snipData = new SnipData
             {
                 Id = snipId,
@@ -40,16 +43,17 @@ namespace SnipperCloneCleanFinal.Core
                 ExtractedValue = sumValue.ToString(),
                 Bounds = bounds,
                 Created = DateTime.Now,
-                Numbers = numbers
+                Numbers = numbers,
+                CellAddress = cellAddress
             };
 
             _snipDatabase[snipId] = snipData;
             return $"=SnipperPro.Connect.SUMS(\"{snipId}\")";
         }
 
-        public static string CreateTableFormula(string documentPath, int pageNumber, TableData table, Rectangle bounds)
+        public static string CreateTableFormula(string documentPath, int pageNumber, TableData table, Rectangle bounds, string cellAddress, out string snipId)
         {
-            var snipId = Guid.NewGuid().ToString();
+            snipId = Guid.NewGuid().ToString();
             var snipData = new SnipData
             {
                 Id = snipId,
@@ -58,16 +62,17 @@ namespace SnipperCloneCleanFinal.Core
                 PageNumber = pageNumber,
                 Bounds = bounds,
                 Created = DateTime.Now,
-                Table = table
+                Table = table,
+                CellAddress = cellAddress
             };
 
             _snipDatabase[snipId] = snipData;
             return $"=SnipperPro.Connect.TABLE(\"{snipId}\")";
         }
         
-        public static string CreateValidationFormula(string documentPath, int pageNumber, Rectangle bounds)
+        public static string CreateValidationFormula(string documentPath, int pageNumber, Rectangle bounds, string cellAddress, out string snipId)
         {
-            var snipId = Guid.NewGuid().ToString();
+            snipId = Guid.NewGuid().ToString();
             var snipData = new SnipData
             {
                 Id = snipId,
@@ -76,7 +81,8 @@ namespace SnipperCloneCleanFinal.Core
                 PageNumber = pageNumber,
                 ExtractedValue = "✓",
                 Bounds = bounds,
-                Created = DateTime.Now
+                Created = DateTime.Now,
+                CellAddress = cellAddress
             };
             
             _snipDatabase[snipId] = snipData;
@@ -84,9 +90,9 @@ namespace SnipperCloneCleanFinal.Core
             return $"=SnipperPro.Connect.VALIDATION(\"{snipId}\")";
         }
         
-        public static string CreateExceptionFormula(string documentPath, int pageNumber, Rectangle bounds, string reason = "")
+        public static string CreateExceptionFormula(string documentPath, int pageNumber, Rectangle bounds, string cellAddress, out string snipId, string reason = "")
         {
-            var snipId = Guid.NewGuid().ToString();
+            snipId = Guid.NewGuid().ToString();
             var snipData = new SnipData
             {
                 Id = snipId,
@@ -96,7 +102,8 @@ namespace SnipperCloneCleanFinal.Core
                 ExtractedValue = "✗",
                 Bounds = bounds,
                 Created = DateTime.Now,
-                ExceptionReason = reason
+                ExceptionReason = reason,
+                CellAddress = cellAddress
             };
             
             _snipDatabase[snipId] = snipData;
@@ -187,6 +194,60 @@ namespace SnipperCloneCleanFinal.Core
                 _ => System.Drawing.Color.Gray
             };
         }
+
+        public static void SaveSnips(Excel.Workbook workbook)
+        {
+            try
+            {
+                var json = JsonConvert.SerializeObject(_snipDatabase);
+                Office.DocumentProperties props = (Office.DocumentProperties)workbook.CustomDocumentProperties;
+                try
+                {
+                    var prop = props["SnipperProSnips"];
+                    prop.Delete();
+                }
+                catch { }
+                props.Add("SnipperProSnips", false, Office.MsoDocProperties.msoPropertyTypeString, json);
+            }
+            catch { }
+        }
+
+        public static void LoadSnips(Excel.Workbook workbook)
+        {
+            try
+            {
+                Office.DocumentProperties props = (Office.DocumentProperties)workbook.CustomDocumentProperties;
+                var prop = props["SnipperProSnips"];
+                string json = prop.Value as string;
+                if (!string.IsNullOrEmpty(json))
+                {
+                    _snipDatabase = JsonConvert.DeserializeObject<Dictionary<string, SnipData>>(json) ?? new Dictionary<string, SnipData>();
+                }
+            }
+            catch
+            {
+                _snipDatabase = new Dictionary<string, SnipData>();
+            }
+        }
+
+        public static void UpdateSnip(string snipId, SnipData updated)
+        {
+            if (!_snipDatabase.ContainsKey(snipId)) return;
+            _snipDatabase[snipId] = updated;
+            try
+            {
+                var app = SnipperCloneCleanFinal.ThisAddIn.Instance?.Application;
+                if (app != null && !string.IsNullOrEmpty(updated.CellAddress))
+                {
+                    var cell = app.Range[updated.CellAddress];
+                    if (updated.Type == SnipMode.Sum && double.TryParse(updated.ExtractedValue, out double d))
+                        cell.Value2 = d;
+                    else
+                        cell.Value2 = updated.ExtractedValue;
+                }
+            }
+            catch { }
+        }
     }
     
     public class SnipData
@@ -201,5 +262,6 @@ namespace SnipperCloneCleanFinal.Core
         public List<double> Numbers { get; set; } = new List<double>();
         public string ExceptionReason { get; set; }
         public TableData Table { get; set; }
+        public string CellAddress { get; set; }
     }
 }

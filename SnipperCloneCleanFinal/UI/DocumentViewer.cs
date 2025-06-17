@@ -86,6 +86,10 @@ namespace SnipperCloneCleanFinal.UI
         private List<SnipRecord> _permanentSnips = new List<SnipRecord>();
         
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
+        public event EventHandler<SnipMovedEventArgs> SnipMoved;
+
+        private SnipRecord _draggingSnip;
+        private Point _dragStart;
 
         public DocumentViewer(SnipEngine snippEngine)
         {
@@ -1143,6 +1147,18 @@ namespace SnipperCloneCleanFinal.UI
                     return;
                 }
 
+                if (!_isSnipMode && e.Button == MouseButtons.Left && _currentDocument != null)
+                {
+                    var hit = _permanentSnips.FirstOrDefault(s => s.PageIndex == _currentPageIndex && s.DocumentPath == _currentDocument.FilePath && ScaleRect(s.Bounds).Contains(e.Location));
+                    if (hit != null)
+                    {
+                        _draggingSnip = hit;
+                        _dragStart = e.Location;
+                        _documentPictureBox.Cursor = Cursors.SizeAll;
+                        return;
+                    }
+                }
+
                 if (_adjustingTable)
                 {
                     // Handle left-click events - check icons FIRST before selection bounds
@@ -1324,6 +1340,16 @@ namespace SnipperCloneCleanFinal.UI
                         Math.Max(0, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.ClientSize.Height)));
                     
                     _viewerPanel.AutoScrollPosition = new Point(newScrollX, newScrollY);
+                    return;
+                }
+
+                if (_draggingSnip != null)
+                {
+                    var dx = e.X - _dragStart.X;
+                    var dy = e.Y - _dragStart.Y;
+                    _draggingSnip.Bounds = new System.Drawing.Rectangle(_draggingSnip.Bounds.X + dx, _draggingSnip.Bounds.Y + dy, _draggingSnip.Bounds.Width, _draggingSnip.Bounds.Height);
+                    _dragStart = e.Location;
+                    SafeInvalidate();
                     return;
                 }
 
@@ -1520,6 +1546,14 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     _isPanning = false;
                     _documentPictureBox.Cursor = _isSnipMode ? Cursors.Cross : Cursors.Default;
+                    return;
+                }
+
+                if (_draggingSnip != null)
+                {
+                    _documentPictureBox.Cursor = Cursors.Default;
+                    SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _draggingSnip });
+                    _draggingSnip = null;
                     return;
                 }
 
@@ -2155,6 +2189,59 @@ namespace SnipperCloneCleanFinal.UI
                 _permanentSnips.Add(snipRecord);
                 SafeInvalidate();
             }
+        }
+
+        public void AssignSnipIdToLastRecord(string snipId)
+        {
+            if (_permanentSnips.Count > 0)
+            {
+                _permanentSnips[_permanentSnips.Count - 1].SnipId = snipId;
+            }
+        }
+
+        public string ExtractTextForSnip(SnipRecord snip, out List<double> numbers)
+        {
+            numbers = new List<double>();
+            if (_currentDocument == null) return string.Empty;
+            var original = new System.Drawing.Rectangle(
+                (int)(snip.Bounds.X / _zoomFactor),
+                (int)(snip.Bounds.Y / _zoomFactor),
+                (int)(snip.Bounds.Width / _zoomFactor),
+                (int)(snip.Bounds.Height / _zoomFactor));
+
+            string text = string.Empty;
+            if (_currentDocument.Type == DocumentType.PDF)
+            {
+                text = ExtractTextFromPdfRegion(snip.DocumentPath, snip.PageIndex, original);
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                var pageImage = _currentDocument.Pages[snip.PageIndex];
+                using (var cropped = CropImageFromDisplayed(pageImage, original))
+                {
+                    if (cropped != null)
+                    {
+                        if (_ocrEngine.Initialize())
+                        {
+                            var result = _ocrEngine.RecognizeText(cropped);
+                            if (result.Success)
+                            {
+                                text = result.Text;
+                                if (result.Numbers != null)
+                                {
+                                    foreach (var n in result.Numbers)
+                                    {
+                                        if (double.TryParse(n.Replace(",", ""), out double dv))
+                                            numbers.Add(dv);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return text;
         }
 
         private Color GetSnipColor(SnipMode snipMode)
@@ -4088,6 +4175,7 @@ namespace SnipperCloneCleanFinal.UI
     public class SnipRecord
     {
         public Guid Id { get; set; } = Guid.NewGuid();
+        public string SnipId { get; set; }
         public System.Drawing.Rectangle Bounds { get; set; }
         public Color Color { get; set; }
         public int PageIndex { get; set; }
@@ -4095,4 +4183,9 @@ namespace SnipperCloneCleanFinal.UI
         public string DocumentPath { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
-} 
+
+    public class SnipMovedEventArgs : EventArgs
+    {
+        public SnipRecord Snip { get; set; }
+    }
+}
