@@ -651,6 +651,7 @@ namespace SnipperCloneCleanFinal
                 
                 string formula = "";
                 string displayValue = "";
+                string snipId = null;
                 
                 // Use the extracted data from the event args
                 switch (e.SnipMode)
@@ -660,7 +661,7 @@ namespace SnipperCloneCleanFinal
                         {
                             formula = DataSnipperFormulas.CreateTextFormula(e.DocumentPath, e.PageNumber,
                                 e.ExtractedText, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height),
-                                activeCell.Address, out var snipId);
+                                activeCell.Address, out snipId);
                             _documentViewer.AssignSnipIdToLastRecord(snipId);
                             displayValue = e.ExtractedText;
                         }
@@ -689,7 +690,7 @@ namespace SnipperCloneCleanFinal
                             {
                                 formula = DataSnipperFormulas.CreateSumFormula(e.DocumentPath, e.PageNumber,
                                     sum, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), numbers,
-                                    activeCell.Address, out var snipId);
+                                    activeCell.Address, out snipId);
                                 _documentViewer.AssignSnipIdToLastRecord(snipId);
                                 displayValue = sum.ToString("F2");
                             }
@@ -718,7 +719,7 @@ namespace SnipperCloneCleanFinal
 
                                 formula = DataSnipperFormulas.CreateTableFormula(e.DocumentPath, e.PageNumber,
                                     tableData, new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height),
-                                    activeCell.Address, out var snipId);
+                                    activeCell.Address, out snipId);
                                 _documentViewer.AssignSnipIdToLastRecord(snipId);
                                 activeCell.Formula = formula;
                                 displayValue = $"Table: {tableData.RowCount}×{tableData.ColumnCount}";
@@ -736,17 +737,24 @@ namespace SnipperCloneCleanFinal
                         
                     case SnipMode.Validation:
                         formula = DataSnipperFormulas.CreateValidationFormula(e.DocumentPath, e.PageNumber,
-                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), activeCell.Address, out var snipId);
+                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), activeCell.Address, out snipId);
                         _documentViewer.AssignSnipIdToLastRecord(snipId);
                         displayValue = "✓";
                         break;
-                        
+
                     case SnipMode.Exception:
                         formula = DataSnipperFormulas.CreateExceptionFormula(e.DocumentPath, e.PageNumber,
-                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), activeCell.Address, out var snipId);
+                            new SnipperCloneCleanFinal.Core.Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width, e.Bounds.Height), activeCell.Address, out snipId);
                         _documentViewer.AssignSnipIdToLastRecord(snipId);
                         displayValue = "✗";
                         break;
+                }
+
+                if (!string.IsNullOrEmpty(snipId))
+                {
+                    var data = DataSnipperFormulas.GetSnipData(snipId);
+                    if (data != null)
+                        DataSnipperPersistence.Upsert(data);
                 }
                 
                 // Insert the value into Excel (except for table which handles its own cells)
@@ -866,12 +874,14 @@ namespace SnipperCloneCleanFinal
                 if (nums.Count > 0) snipData.Numbers = nums;
             }
             DataSnipperFormulas.UpdateSnip(e.Snip.SnipId, snipData);
+            DataSnipperPersistence.Upsert(snipData);
         }
 
         private void OnSnipClicked(object sender, SnipClickedEventArgs e)
         {
             var snipData = DataSnipperFormulas.GetSnipData(e.Snip.SnipId);
             if (snipData == null || string.IsNullOrEmpty(snipData.CellAddress)) return;
+            DataSnipperPersistence.Upsert(snipData);
             try
             {
                 var cell = Application.Range[snipData.CellAddress];
@@ -980,40 +990,21 @@ namespace SnipperCloneCleanFinal
             try
             {
                 var formula = target.Formula as string;
-                
-                // Add debugging
-                System.Diagnostics.Debug.WriteLine($"Double-click detected on cell {target.Address}");
-                System.Diagnostics.Debug.WriteLine($"Cell formula: '{formula}'");
-                System.Diagnostics.Debug.WriteLine($"Cell value: '{target.Value}'");
-                
-                if (string.IsNullOrWhiteSpace(formula)) 
+                if (FormulaParser.TryGetId(formula, out var snipId))
                 {
-                    System.Diagnostics.Debug.WriteLine("No formula found in cell - exiting");
-                    return;
-                }
-
-                var match = System.Text.RegularExpressions.Regex.Match(formula, @"=(?:DS\.|SnipperPro\.Connect\.)(?:TEXTS|SUMS|TABLE|VALIDATION|EXCEPTION)\(""(?<id>[^""]+)""\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                
-                System.Diagnostics.Debug.WriteLine($"Regex match success: {match.Success}");
-                
-                if (match.Success)
-                {
-                    var snipId = match.Groups["id"].Value;
-                    System.Diagnostics.Debug.WriteLine($"Extracted snip ID: {snipId}");
-                    
-                    if (DataSnipperFormulas.NavigateToSnip(snipId))
+                    if (DataSnipperPersistence.TryGet(snipId, out var data))
                     {
-                        System.Diagnostics.Debug.WriteLine("Navigation successful - cancelling Excel default action");
+                        _documentViewer.NavigateTo(
+                            data.DocumentPath,
+                            data.PageNumber,
+                            new System.Drawing.RectangleF(
+                                data.Bounds.X, data.Bounds.Y, data.Bounds.Width, data.Bounds.Height));
                         cancel = true;
                     }
-                    else
+                    else if (DataSnipperFormulas.NavigateToSnip(snipId))
                     {
-                        System.Diagnostics.Debug.WriteLine("Navigation failed");
+                        cancel = true;
                     }
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("Formula didn't match DS pattern");
                 }
             }
             catch (Exception ex)
@@ -1025,11 +1016,21 @@ namespace SnipperCloneCleanFinal
         private void OnWorkbookBeforeSave(Excel.Workbook wb, bool saveAsUI, ref bool cancel)
         {
             DataSnipperFormulas.SaveSnips(wb);
+            try
+            {
+                DataSnipperPersistence.Save(wb);
+            }
+            catch { }
         }
 
         private void OnWorkbookOpen(Excel.Workbook wb)
         {
             DataSnipperFormulas.LoadSnips(wb);
+            try
+            {
+                DataSnipperPersistence.Load(wb);
+            }
+            catch { }
         }
         #endregion
 
