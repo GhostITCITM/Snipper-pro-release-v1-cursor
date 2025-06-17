@@ -84,12 +84,16 @@ namespace SnipperCloneCleanFinal.UI
         private readonly Bitmap _trashIcon;         // loaded once
         private readonly Pen _trashBorder = new Pen(Color.Black, 1);
         private List<SnipRecord> _permanentSnips = new List<SnipRecord>();
-        
+
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
         public event EventHandler<SnipMovedEventArgs> SnipMoved;
 
         private SnipRecord _draggingSnip;
+        private SnipRecord _resizingSnip;
+        private ResizeHandle _resizeHandle = ResizeHandle.None;
         private Point _dragStart;
+
+        private const int HANDLE_SIZE = 6; // px for resize handles
 
         public DocumentViewer(SnipEngine snippEngine)
         {
@@ -1149,13 +1153,25 @@ namespace SnipperCloneCleanFinal.UI
 
                 if (!_isSnipMode && e.Button == MouseButtons.Left && _currentDocument != null)
                 {
-                    var hit = _permanentSnips.FirstOrDefault(s => s.PageIndex == _currentPageIndex && s.DocumentPath == _currentDocument.FilePath && ScaleRect(s.Bounds).Contains(e.Location));
-                    if (hit != null)
+                    foreach (var snip in _permanentSnips.Where(s => s.PageIndex == _currentPageIndex && s.DocumentPath == _currentDocument.FilePath))
                     {
-                        _draggingSnip = hit;
-                        _dragStart = e.Location;
-                        _documentPictureBox.Cursor = Cursors.SizeAll;
-                        return;
+                        var scaled = ScaleRect(snip.Bounds);
+                        var handle = GetHandleAtPoint(scaled, e.Location);
+                        if (handle != ResizeHandle.None)
+                        {
+                            _resizingSnip = snip;
+                            _resizeHandle = handle;
+                            _dragStart = e.Location;
+                            _documentPictureBox.Cursor = Cursors.SizeNWSE;
+                            return;
+                        }
+                        if (scaled.Contains(e.Location))
+                        {
+                            _draggingSnip = snip;
+                            _dragStart = e.Location;
+                            _documentPictureBox.Cursor = Cursors.SizeAll;
+                            return;
+                        }
                     }
                 }
 
@@ -1343,6 +1359,42 @@ namespace SnipperCloneCleanFinal.UI
                     return;
                 }
 
+                if (_resizingSnip != null)
+                {
+                    var rect = _resizingSnip.Bounds;
+                    int dx = e.X - _dragStart.X;
+                    int dy = e.Y - _dragStart.Y;
+
+                    switch (_resizeHandle)
+                    {
+                        case ResizeHandle.TopLeft:
+                            rect.X += dx; rect.Y += dy; rect.Width -= dx; rect.Height -= dy; break;
+                        case ResizeHandle.Top:
+                            rect.Y += dy; rect.Height -= dy; break;
+                        case ResizeHandle.TopRight:
+                            rect.Y += dy; rect.Width += dx; rect.Height -= dy; break;
+                        case ResizeHandle.Right:
+                            rect.Width += dx; break;
+                        case ResizeHandle.BottomRight:
+                            rect.Width += dx; rect.Height += dy; break;
+                        case ResizeHandle.Bottom:
+                            rect.Height += dy; break;
+                        case ResizeHandle.BottomLeft:
+                            rect.X += dx; rect.Width -= dx; rect.Height += dy; break;
+                        case ResizeHandle.Left:
+                            rect.X += dx; rect.Width -= dx; break;
+                    }
+
+                    // Ensure minimum size
+                    if (rect.Width < 5) rect.Width = 5;
+                    if (rect.Height < 5) rect.Height = 5;
+
+                    _resizingSnip.Bounds = rect;
+                    _dragStart = e.Location;
+                    SafeInvalidate();
+                    return;
+                }
+
                 if (_draggingSnip != null)
                 {
                     var dx = e.X - _dragStart.X;
@@ -1351,6 +1403,25 @@ namespace SnipperCloneCleanFinal.UI
                     _dragStart = e.Location;
                     SafeInvalidate();
                     return;
+                }
+
+                if (!_isSnipMode && _currentDocument != null)
+                {
+                    foreach (var snip in _permanentSnips.Where(s => s.PageIndex == _currentPageIndex && s.DocumentPath == _currentDocument.FilePath))
+                    {
+                        var scaled = ScaleRect(snip.Bounds);
+                        if (GetHandleAtPoint(scaled, e.Location) != ResizeHandle.None)
+                        {
+                            _documentPictureBox.Cursor = Cursors.SizeNWSE;
+                            return;
+                        }
+                        if (scaled.Contains(e.Location))
+                        {
+                            _documentPictureBox.Cursor = Cursors.SizeAll;
+                            return;
+                        }
+                    }
+                    _documentPictureBox.Cursor = Cursors.Default;
                 }
 
                 if (_draggingColumnIndex >= 0 && _adjustingTable)
@@ -1492,9 +1563,9 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     // Add padding to ensure smooth highlighting
                     var paddedRegion = new System.Drawing.Rectangle(
-                        Math.Max(0, region.X - 3), 
+                        Math.Max(0, region.X - 3),
                         Math.Max(0, region.Y - 3),
-                        region.Width + 6, 
+                        region.Width + 6,
                         region.Height + 6
                     );
 
@@ -1504,6 +1575,52 @@ namespace SnipperCloneCleanFinal.UI
             catch (Exception)
             {
                 // Ignore invalidate errors
+            }
+        }
+
+        private ResizeHandle GetHandleAtPoint(System.Drawing.Rectangle rect, Point p)
+        {
+            var handleRects = new Dictionary<ResizeHandle, System.Drawing.Rectangle>
+            {
+                { ResizeHandle.TopLeft, new System.Drawing.Rectangle(rect.Left - HANDLE_SIZE/2, rect.Top - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.Top, new System.Drawing.Rectangle(rect.Left + rect.Width/2 - HANDLE_SIZE/2, rect.Top - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.TopRight, new System.Drawing.Rectangle(rect.Right - HANDLE_SIZE/2, rect.Top - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.Right, new System.Drawing.Rectangle(rect.Right - HANDLE_SIZE/2, rect.Top + rect.Height/2 - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.BottomRight, new System.Drawing.Rectangle(rect.Right - HANDLE_SIZE/2, rect.Bottom - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.Bottom, new System.Drawing.Rectangle(rect.Left + rect.Width/2 - HANDLE_SIZE/2, rect.Bottom - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.BottomLeft, new System.Drawing.Rectangle(rect.Left - HANDLE_SIZE/2, rect.Bottom - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
+                { ResizeHandle.Left, new System.Drawing.Rectangle(rect.Left - HANDLE_SIZE/2, rect.Top + rect.Height/2 - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) }
+            };
+
+            foreach (var kvp in handleRects)
+            {
+                if (kvp.Value.Contains(p))
+                    return kvp.Key;
+            }
+            return ResizeHandle.None;
+        }
+
+        private void DrawResizeHandles(Graphics g, System.Drawing.Rectangle rect)
+        {
+            var handles = new[]
+            {
+                new Point(rect.Left, rect.Top), // TL
+                new Point(rect.Left + rect.Width/2, rect.Top), // Top
+                new Point(rect.Right, rect.Top), // TR
+                new Point(rect.Right, rect.Top + rect.Height/2), // Right
+                new Point(rect.Right, rect.Bottom), // BR
+                new Point(rect.Left + rect.Width/2, rect.Bottom), // Bottom
+                new Point(rect.Left, rect.Bottom), // BL
+                new Point(rect.Left, rect.Top + rect.Height/2), // Left
+            };
+
+            foreach (var pt in handles)
+            {
+                var handleRect = new System.Drawing.Rectangle(pt.X - HANDLE_SIZE/2, pt.Y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+                using (var b = new SolidBrush(Color.White))
+                    g.FillRectangle(b, handleRect);
+                using (var p = new Pen(Color.Black, 1))
+                    g.DrawRectangle(p, handleRect);
             }
         }
 
@@ -1546,6 +1663,15 @@ namespace SnipperCloneCleanFinal.UI
                 {
                     _isPanning = false;
                     _documentPictureBox.Cursor = _isSnipMode ? Cursors.Cross : Cursors.Default;
+                    return;
+                }
+
+                if (_resizingSnip != null)
+                {
+                    _documentPictureBox.Cursor = Cursors.Default;
+                    SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _resizingSnip });
+                    _resizingSnip = null;
+                    _resizeHandle = ResizeHandle.None;
                     return;
                 }
 
@@ -2149,24 +2275,27 @@ namespace SnipperCloneCleanFinal.UI
                 foreach (var snip in currentPageSnips)
                 {
                     var scaledBounds = ScaleRect(snip.Bounds);
-                    
+
                     // Draw snip rectangle
                     using (var pen = new Pen(snip.Color, 3))
                     {
                         e.Graphics.DrawRectangle(pen, scaledBounds);
                     }
-                    
+
                     // Draw semi-transparent overlay
                     using (var brush = new SolidBrush(Color.FromArgb(30, snip.Color)))
                     {
                         e.Graphics.FillRectangle(brush, scaledBounds);
                     }
-                    
+
+                    // Draw resize handles
+                    DrawResizeHandles(e.Graphics, scaledBounds);
+
                     // Draw trash icon
                     var trashRect = new System.Drawing.Rectangle(
-                        scaledBounds.Right - TRASH_SIZE, 
-                        scaledBounds.Top, 
-                        TRASH_SIZE, 
+                        scaledBounds.Right - TRASH_SIZE,
+                        scaledBounds.Top,
+                        TRASH_SIZE,
                         TRASH_SIZE);
                     e.Graphics.DrawImage(_trashIcon, trashRect);
                 }
@@ -4187,5 +4316,18 @@ namespace SnipperCloneCleanFinal.UI
     public class SnipMovedEventArgs : EventArgs
     {
         public SnipRecord Snip { get; set; }
+    }
+
+    public enum ResizeHandle
+    {
+        None,
+        TopLeft,
+        Top,
+        TopRight,
+        Right,
+        BottomRight,
+        Bottom,
+        BottomLeft,
+        Left
     }
 }
