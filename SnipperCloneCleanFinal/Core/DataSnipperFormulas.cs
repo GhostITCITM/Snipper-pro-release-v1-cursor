@@ -10,7 +10,9 @@ namespace SnipperCloneCleanFinal.Core
 {
     public static class DataSnipperFormulas
     {
-        private static readonly Dictionary<string, SnipData> _snipDatabase = new Dictionary<string, SnipData>();
+        // Dictionary storing all snips for the current workbook. It needs to be
+        // reinitialised when loading a workbook, so it cannot be readonly.
+        private static Dictionary<string, SnipData> _snipDatabase = new Dictionary<string, SnipData>();
         private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings
         {
             Formatting = Formatting.None,
