@@ -228,17 +228,37 @@ namespace SnipperCloneCleanFinal.Core
 
         private byte[,] GetGrayscaleData(Bitmap image)
         {
-            var data = new byte[image.Width, image.Height];
-            
-            for (int x = 0; x < image.Width; x++)
+            int width = image.Width;
+            int height = image.Height;
+            var data = new byte[width, height];
+
+            var rect = new Rectangle(0, 0, width, height);
+            var bmpData = image.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+
+            try
             {
-                for (int y = 0; y < image.Height; y++)
+                int stride = bmpData.Stride;
+                byte[] buffer = new byte[stride * height];
+                Marshal.Copy(bmpData.Scan0, buffer, 0, buffer.Length);
+
+                for (int y = 0; y < height; y++)
                 {
-                    var pixel = image.GetPixel(x, y);
-                    data[x, y] = (byte)((pixel.R + pixel.G + pixel.B) / 3);
+                    int row = y * stride;
+                    for (int x = 0; x < width; x++)
+                    {
+                        int index = row + x * 3;
+                        byte b = buffer[index];
+                        byte g = buffer[index + 1];
+                        byte r = buffer[index + 2];
+                        data[x, y] = (byte)((r + g + b) / 3);
+                    }
                 }
             }
-            
+            finally
+            {
+                image.UnlockBits(bmpData);
+            }
+
             return data;
         }
 
@@ -432,9 +452,9 @@ namespace SnipperCloneCleanFinal.Core
 
         private string[] ExtractNumbers(string text)
         {
-            if (string.IsNullOrEmpty(text)) return new string[0];
-            
-            var numbers = new List<string>();
+            if (string.IsNullOrEmpty(text)) return Array.Empty<string>();
+
+            var numbers = new HashSet<string>();
             
             // Find all numeric patterns
             var patterns = new[]
@@ -448,10 +468,13 @@ namespace SnipperCloneCleanFinal.Core
             foreach (var pattern in patterns)
             {
                 var matches = Regex.Matches(text, pattern);
-                numbers.AddRange(matches.Cast<Match>().Select(m => m.Value));
+                foreach (Match m in matches)
+                {
+                    numbers.Add(m.Value);
+                }
             }
-            
-            return numbers.Distinct().ToArray();
+
+            return numbers.ToArray();
         }
 
         private double CalculateConfidence(string text)
