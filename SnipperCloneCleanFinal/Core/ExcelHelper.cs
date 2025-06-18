@@ -40,28 +40,31 @@ namespace SnipperCloneCleanFinal.Core
             try
             {
                 var worksheet = startCell.Worksheet;
-                int startRow = startCell.Row;
-                int startCol = startCell.Column;
+                int headerRows = tableData.HasHeader && tableData.Headers != null ? 1 : 0;
+                int rows = tableData.Rows.Count + headerRows;
+                int cols = tableData.ColumnCount;
 
-                // Write headers if present
-                if (tableData.HasHeader && tableData.Headers != null)
+                // Build data array (headers + rows) for efficient assignment
+                object[,] values = new object[rows, cols];
+
+                int currentRow = 0;
+                if (headerRows == 1)
                 {
-                    for (int i = 0; i < tableData.Headers.Count; i++)
-                    {
-                        worksheet.Cells[startRow, startCol + i] = tableData.Headers[i];
-                    }
-                    startRow++;
+                    for (int c = 0; c < cols; c++)
+                        values[0, c] = c < tableData.Headers.Count ? tableData.Headers[c] : null;
+                    currentRow = 1;
                 }
 
-                // Write data rows
-                for (int row = 0; row < tableData.Rows.Count; row++)
+                for (int r = 0; r < tableData.Rows.Count; r++, currentRow++)
                 {
-                    var rowData = tableData.Rows[row];
-                    for (int col = 0; col < rowData.Length; col++)
-                    {
-                        worksheet.Cells[startRow + row, startCol + col] = rowData[col];
-                    }
+                    var rowData = tableData.Rows[r];
+                    for (int c = 0; c < cols; c++)
+                        values[currentRow, c] = c < rowData.Length ? rowData[c] : null;
                 }
+
+                var endCell = startCell.Offset[rows - 1, cols - 1];
+                var writeRange = worksheet.Range[startCell, endCell];
+                writeRange.Value2 = values;
 
                 Debug.WriteLine($"ExcelHelper: Written table data to range starting at {startCell.Address}");
             }
@@ -94,4 +97,4 @@ namespace SnipperCloneCleanFinal.Core
             }
         }
     }
-} 
+}
