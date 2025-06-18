@@ -437,12 +437,12 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
 
-        private void OnDragDrop(object sender, DragEventArgs e)
+        private async void OnDragDrop(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                _ = LoadDocuments(files);
+                await LoadDocuments(files);
             }
         }
 
@@ -2828,6 +2828,7 @@ namespace SnipperCloneCleanFinal.UI
 
             _loadedDocuments.Remove(document);
             _documentSelector.Items.Remove(document.Name);
+            _documentTexts.Remove(document.FilePath);
 
             if (_currentDocument == document)
             {
@@ -2845,12 +2846,13 @@ namespace SnipperCloneCleanFinal.UI
             {
                 _smoothScrollTimer?.Stop();
                 _smoothScrollTimer?.Dispose();
-                
+
                 foreach (var doc in _loadedDocuments)
                 {
                     doc.Dispose();
                 }
                 _loadedDocuments.Clear();
+                _documentTexts.Clear();
                 _ocrEngine?.Dispose();
 
                 Logger.Info("DocumentViewer disposed");
