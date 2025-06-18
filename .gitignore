@@ -59,4 +59,4 @@ vstor_redist.exe
 *.pem
 
 # Local configuration
-*.config.user 
+*.config.user
