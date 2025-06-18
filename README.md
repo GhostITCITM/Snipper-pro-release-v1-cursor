@@ -139,3 +139,8 @@ For issues:
 ---
 
 **Ready to extract data like a pro!** 🎉 
+
+## 📄 License
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for open source licenses of the libraries used in this project. This project itself is provided under the terms of the MIT License.
+
