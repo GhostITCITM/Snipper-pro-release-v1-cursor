@@ -4,7 +4,7 @@ namespace SnipperCloneCleanFinal.Core
 {
     internal static class FormulaParser
     {
-        private static readonly Regex Rx = new(@"(?:DS\.|SnipperPro\.Connect\.)(?:\w+)\(\"(?<id>[^\"]+)\"\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex Rx = new Regex(@"(?:DS\.|SnipperPro\.Connect\.)(?:\w+)\(""(?<id>[^""]+)""\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static bool TryGetId(string formula, out string id)
         {

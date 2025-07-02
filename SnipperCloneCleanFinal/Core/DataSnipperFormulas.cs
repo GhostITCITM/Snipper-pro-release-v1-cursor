@@ -149,14 +149,9 @@ namespace SnipperCloneCleanFinal.Core
                     // Use the main document viewer for navigation
                     var viewer = addIn.DocumentViewer;
                     
-                    // Load the document if not already loaded
-                    System.Diagnostics.Debug.WriteLine($"Loading document: {snipData.DocumentPath}");
-                    if (!viewer.LoadDocument(snipData.DocumentPath))
-                    {
-                        Logger.Error($"Failed to load document for snip {snipId}");
-                        System.Diagnostics.Debug.WriteLine("Document loading failed");
-                        return false;
-                    }
+                    // First check if document is already loaded to avoid reopening
+                    System.Diagnostics.Debug.WriteLine($"Checking if document is already loaded: {snipData.DocumentPath}");
+                    viewer.LoadDocumentIfNeeded(snipData.DocumentPath);
                     
                     // Navigate to the page and highlight the region
                     System.Diagnostics.Debug.WriteLine($"Navigating to page {snipData.PageNumber}");
@@ -165,10 +160,15 @@ namespace SnipperCloneCleanFinal.Core
                     System.Diagnostics.Debug.WriteLine($"Highlighting region: {snipData.Bounds}");
                     viewer.HighlightRegion(snipData.Bounds.ToDrawingRectangle(), GetSnipColor(snipData.Type));
                     
-                    // Show and bring to front
-                    System.Diagnostics.Debug.WriteLine("Showing and bringing viewer to front");
+                    // Show and bring to front - but don't create multiple instances
+                    System.Diagnostics.Debug.WriteLine("Ensuring viewer is visible");
+                    if (viewer.WindowState == System.Windows.Forms.FormWindowState.Minimized)
+                    {
+                        viewer.WindowState = System.Windows.Forms.FormWindowState.Normal;
+                    }
                     viewer.Show();
                     viewer.BringToFront();
+                    viewer.Focus();
                     
                     Logger.Info($"Successfully navigated to snip {snipId} on page {snipData.PageNumber}");
                     System.Diagnostics.Debug.WriteLine("Navigation completed successfully");
@@ -249,21 +249,95 @@ namespace SnipperCloneCleanFinal.Core
 
         public static void UpdateSnip(string snipId, SnipData updated)
         {
-            if (!_snipDatabase.TryGetValue(snipId, out _)) return;
+            if (_snipDatabase.ContainsKey(snipId))
+            {
             _snipDatabase[snipId] = updated;
+            }
+        }
+        
+        public static bool DeleteSnip(string snipId)
+        {
             try
             {
-                var app = SnipperCloneCleanFinal.ThisAddIn.Instance?.Application;
-                if (app != null && !string.IsNullOrEmpty(updated.CellAddress))
+                // Get snip data before deleting
+                var snipData = GetSnipData(snipId);
+                if (snipData == null)
                 {
-                    var cell = app.Range[updated.CellAddress];
-                    object val = updated.Type == SnipMode.Sum && double.TryParse(updated.ExtractedValue, out double d) ? (object)d : updated.ExtractedValue;
-                    cell.Value2 = val;
+                    System.Diagnostics.Debug.WriteLine($"No snip data found for deletion: {snipId}");
+                    return false;
+                }
+                
+                // Remove from database
+                var removed = _snipDatabase.Remove(snipId);
+                System.Diagnostics.Debug.WriteLine($"Snip {snipId} removed from database: {removed}");
+                
+                // Clear the Excel cell
+                try
+                {
+                    var addIn = SnipperCloneCleanFinal.ThisAddIn.Instance;
+                    if (addIn?.Application?.ActiveWorkbook != null && !string.IsNullOrEmpty(snipData.CellAddress))
+                {
+                        var workbook = addIn.Application.ActiveWorkbook;
+                        
+                        // Parse cell address to get sheet and cell reference
+                        // Format could be "Sheet1!A1" or just "A1"
+                        string sheetName = null;
+                        string cellRef = snipData.CellAddress;
+                        
+                        if (snipData.CellAddress.Contains("!"))
+                        {
+                            var parts = snipData.CellAddress.Split('!');
+                            sheetName = parts[0];
+                            cellRef = parts[1];
+                        }
+                        
+                        Excel.Worksheet worksheet;
+                        if (!string.IsNullOrEmpty(sheetName))
+                        {
+                            worksheet = workbook.Worksheets[sheetName];
+                        }
+                        else
+                        {
+                            worksheet = workbook.ActiveSheet;
+                        }
+                        
+                                                 var range = worksheet.Range[cellRef];
+                         
+                         // Complete cleanup - clear everything
+                         range.ClearContents();  // Clear values and formulas
+                         range.ClearComments();  // Clear any comments
+                         range.ClearFormats();   // Clear formatting
+                         range.ClearNotes();     // Clear notes
+                         
+                         // Also clear any hyperlinks
+                         if (range.Hyperlinks.Count > 0)
+                         {
+                             range.Hyperlinks.Delete();
+                         }
+                         
+                         System.Diagnostics.Debug.WriteLine($"Completely cleared Excel cell: {snipData.CellAddress}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to clear Excel cell for snip {snipId}: {ex.Message}", ex);
+                    System.Diagnostics.Debug.WriteLine($"Failed to clear Excel cell: {ex.Message}");
+                }
+                
+                return removed;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to delete snip {snipId}: {ex.Message}", ex);
+                System.Diagnostics.Debug.WriteLine($"Exception in DeleteSnip: {ex.Message}");
+                return false;
                 }
             }
-            catch { }
+        
+        public static Dictionary<string, SnipData> GetAllSnips()
+        {
+            return new Dictionary<string, SnipData>(_snipDatabase);
         }
-
     }
     
     public class SnipData

@@ -93,9 +93,9 @@ namespace SnipperCloneCleanFinal.UI
         private List<Bitmap> _documentPages = new List<Bitmap>();
         
         // Persistent overlay storage - stores overlays per document
-        private static Dictionary<string, List<SnipOverlay>> _documentOverlays = new Dictionary<string, List<SnipOverlay>>();
-        private List<SnipOverlay> _currentOverlays = new List<SnipOverlay>();
-        private SnipOverlay _selectedOverlay = null;
+        private static Dictionary<string, List<LegacySnipOverlay>> _documentOverlays = new Dictionary<string, List<LegacySnipOverlay>>();
+        private List<LegacySnipOverlay> _currentOverlays = new List<LegacySnipOverlay>();
+        private LegacySnipOverlay _selectedOverlay = null;
         
         // Search functionality data
         private static Dictionary<string, List<DocumentText>> _documentTexts = new Dictionary<string, List<DocumentText>>();
@@ -331,7 +331,7 @@ namespace SnipperCloneCleanFinal.UI
         
         public void HighlightRegion(Rectangle bounds, Color color)
         {
-            var overlay = new SnipOverlay
+            var overlay = new LegacySnipOverlay
             {
                 Bounds = new SnipperCloneCleanFinal.Core.Rectangle(bounds.X, bounds.Y, bounds.Width, bounds.Height).ToDrawingRectangle(),
                 Color = color,
@@ -471,7 +471,7 @@ namespace SnipperCloneCleanFinal.UI
                 if (rect.Width > 5 && rect.Height > 5) // Minimum selection size
                 {
                     // Create persistent overlay immediately
-                    var overlay = new SnipOverlay
+                    var overlay = new LegacySnipOverlay
                     {
                         Id = Guid.NewGuid(),
                         Bounds = rect,
@@ -583,7 +583,7 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
         
-        private SnipOverlay GetOverlayAtPoint(Point point)
+        private LegacySnipOverlay GetOverlayAtPoint(Point point)
         {
             // Find overlay at the clicked point (in reverse order to get topmost)
             for (int i = _currentOverlays.Count - 1; i >= 0; i--)
@@ -642,7 +642,7 @@ namespace SnipperCloneCleanFinal.UI
             {
                 if (!_documentOverlays.ContainsKey(_currentDocumentPath))
                 {
-                    _documentOverlays[_currentDocumentPath] = new List<SnipOverlay>();
+                    _documentOverlays[_currentDocumentPath] = new List<LegacySnipOverlay>();
                 }
                 else
                 {
@@ -905,7 +905,7 @@ namespace SnipperCloneCleanFinal.UI
         }
     }
     
-    public class SnipOverlay
+    public class LegacySnipOverlay
     {
         public Guid Id { get; set; }
         public System.Drawing.Rectangle Bounds { get; set; }

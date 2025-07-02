@@ -1,0 +1,433 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using System.Runtime.InteropServices;
+using System.Reflection;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using Tesseract;
+using OpenCvSharp;
+using OpenCvSharp.Extensions;
+using SnipperCloneCleanFinal.Infrastructure;
+
+namespace SnipperCloneCleanFinal.Core
+{
+    /// <summary>
+    /// Fixed OCR Engine that addresses the root cause of garbled text patterns
+    /// </summary>
+    public class OCREngine : IDisposable
+    {
+        private bool _disposed = false;
+        private static bool _tesseractAvailable = false;
+        private static bool _tesseractLibAvailable = false;
+        private static string _tesseractError = null;
+        
+        // Step 5: Guard against duplicate snips
+        private static readonly SemaphoreSlim SnipGuard = new SemaphoreSlim(1, 1);
+
+        static OCREngine()
+        {
+            try
+            {
+                // Check if Tesseract library is present and tessdata exists
+                _ = typeof(TesseractEngine);
+                
+                // Try multiple possible locations for tessdata in VSTO context
+                var possiblePaths = new[]
+                {
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata"),
+                    Path.Combine(Environment.CurrentDirectory, "tessdata"),
+                    Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "tessdata"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "AddIns", "tessdata"),
+                    // Common VSTO deployment paths
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SnipperPro", "tessdata"),
+                    Path.Combine(@"C:\Program Files\Microsoft Office\root\Office16\ADDINS\SnipperPro", "tessdata")
+                };
+
+                string validDataPath = null;
+                foreach (var path in possiblePaths)
+                {
+                    var engFile = Path.Combine(path, "eng.traineddata");
+                    if (Directory.Exists(path) && File.Exists(engFile) && new FileInfo(engFile).Length > 1000) // At least 1KB file
+                    {
+                        validDataPath = path;
+                        _tesseractLibAvailable = true;
+                        break;
+                    }
+                }
+
+                if (_tesseractLibAvailable && validDataPath != null)
+                {
+                    Logger.Info($"Tesseract library available with data at: {validDataPath}");
+                    Console.WriteLine($"Tesseract library available with data at: {validDataPath}");
+                }
+                else
+                {
+                    var pathsChecked = string.Join("; ", possiblePaths);
+                    Logger.Info($"Tesseract data not found in any paths: {pathsChecked}");
+                    Console.WriteLine($"Tesseract data not found in any paths: {pathsChecked}");
+                }
+                
+                // Detect if the tesseract CLI is available
+                var tesseractPath = Environment.GetEnvironmentVariable("TESSERACT_PATH");
+                if (string.IsNullOrEmpty(tesseractPath))
+                {
+                    tesseractPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "tesseract.exe" : "/usr/bin/tesseract";
+                }
+
+                _tesseractAvailable = File.Exists(tesseractPath);
+            }
+            catch (Exception ex)
+            {
+                _tesseractError = ex.Message;
+                _tesseractAvailable = false;
+                _tesseractLibAvailable = false;
+                Logger.Info($"Tesseract initialization failed: {ex.Message}");
+                Console.WriteLine($"Tesseract initialization failed: {ex.Message}");
+            }
+
+            if (!_tesseractAvailable && !_tesseractLibAvailable)
+            {
+                _tesseractError = "Tesseract not available. Install Visual C++ 2015-2022 Redistributable and verify tessdata location.";
+                Logger.Info(_tesseractError);
+            }
+        }
+
+        public bool Initialize()
+        {
+            return true;
+        }
+
+        public async Task<OCRResult> RecognizeTextAsync(Bitmap image)
+        {
+            // Step 5: Guard against duplicate snips
+            await SnipGuard.WaitAsync();
+            try
+            {
+                return RecognizeText(image);
+            }
+            finally
+            {
+                SnipGuard.Release();
+            }
+        }
+
+        public OCRResult RecognizeText(Bitmap image)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(OCREngine));
+
+            // Check for GDI+ errors (common in VSTO)
+            try
+            {
+                // Force image validation to catch GDI+ issues early
+                var width = image.Width;
+                var height = image.Height;
+                var format = image.PixelFormat;
+                Logger.Info($"Processing image: {width}x{height}, format: {format}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"Image validation failed: {ex.Message}");
+                return new OCRResult
+                {
+                    Success = false,
+                    ErrorMessage = $"Invalid image data: {ex.Message}",
+                    Text = string.Empty,
+                    Numbers = new string[0],
+                    Confidence = 0
+                };
+            }
+
+            // Step 1: Capture at native scale with diagnostic
+            var diagnosticPath = SaveDiagnosticImage(image);
+            var scaledImage = ScaleToOptimalSize(image);
+            
+            try
+            {
+                // Step 2: Use OpenCV preprocessing instead of ad-hoc filters
+                using (var preprocessedImage = PreprocessImageForOCR(scaledImage))
+                {
+                    // Try Tesseract library
+                    var tessResult = RecognizeUsingLibrary(preprocessedImage);
+                    if (tessResult.Success)
+                    {
+                        Logger.Info($"Tesseract OCR successful: '{tessResult.Text.Substring(0, Math.Min(tessResult.Text.Length, 50))}...'");
+                        return tessResult;
+                    }
+                    Logger.Info($"Tesseract OCR failed: {tessResult.ErrorMessage}");
+                }
+            }
+            finally
+            {
+                if (scaledImage != image) scaledImage?.Dispose();
+            }
+
+            // Final fallback - return failure
+            Logger.Info("All OCR attempts failed");
+            return new OCRResult
+            {
+                Success = false,
+                ErrorMessage = "OCR failed - no readable text found",
+                Text = string.Empty,
+                Numbers = new string[0],
+                Confidence = 0
+            };
+        }
+
+        // Step 1: Capture at native scale with diagnostic
+        private string SaveDiagnosticImage(Bitmap image)
+        {
+            try
+            {
+                var diagnosticDir = Path.Combine(Path.GetTempPath(), "SnipperDiagnostics");
+                Directory.CreateDirectory(diagnosticDir);
+                
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                var diagnosticPath = Path.Combine(diagnosticDir, $"raw_snip_{timestamp}.png");
+                
+                image.Save(diagnosticPath, System.Drawing.Imaging.ImageFormat.Png);
+                Logger.Info($"Raw snip saved to: {diagnosticPath}");
+                
+                return diagnosticPath;
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"Failed to save diagnostic image: {ex.Message}");
+                return null;
+            }
+        }
+
+        private Bitmap ScaleToOptimalSize(Bitmap original)
+        {
+            // Estimate capital letter height (assume text takes up about 70% of image height)
+            var estimatedCapitalHeight = original.Height * 0.7;
+            
+            Logger.Info($"Estimated capital letter height: {estimatedCapitalHeight:F1} px");
+            
+            // If already between 20-40px, keep unchanged
+            if (estimatedCapitalHeight >= 20 && estimatedCapitalHeight <= 40)
+            {
+                Logger.Info("Image already at optimal scale, keeping unchanged");
+                return new Bitmap(original);
+            }
+            
+            // Single rescale to target ~35px capital height
+            var targetHeight = 35.0 / 0.7; // Target image height for 35px capitals
+            var scaleFactor = targetHeight / original.Height;
+            
+            int newWidth = (int)(original.Width * scaleFactor);
+            int newHeight = (int)(original.Height * scaleFactor);
+            
+            Logger.Info($"Scaling by factor {scaleFactor:F2} to {newWidth}x{newHeight} for ~35px capital height");
+            
+            var scaled = new Bitmap(newWidth, newHeight);
+            using (var g = Graphics.FromImage(scaled))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                
+                g.DrawImage(original, 0, 0, newWidth, newHeight);
+            }
+            
+            return scaled;
+        }
+
+        // Step 2: OpenCV preprocessing instead of ad-hoc filters
+        private Bitmap PreprocessImageForOCR(Bitmap original)
+        {
+            try
+            {
+                Logger.Info("Applying OpenCV preprocessing to eliminate garbled patterns");
+                
+                // Convert to OpenCV Mat
+                using (Mat m = BitmapConverter.ToMat(original))
+                {
+                    // Convert to grayscale
+                    Cv2.CvtColor(m, m, ColorConversionCodes.BGR2GRAY);
+                    
+                    // Adaptive threshold - this replaces all manual thresholding
+                    Cv2.AdaptiveThreshold(m, m, 255, AdaptiveThresholdTypes.GaussianC,
+                                         ThresholdTypes.BinaryInv, 31, 10);
+                    
+                    // Morphological opening to clean up noise
+                    using (var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3)))
+                    {
+                        Cv2.MorphologyEx(m, m, MorphTypes.Open, kernel);
+                    }
+                    
+                    // Convert back to Bitmap
+                    var result = BitmapConverter.ToBitmap(m);
+                    Logger.Info("OpenCV preprocessing completed successfully");
+                    
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"OpenCV preprocessing failed: {ex.Message}, falling back to original");
+                return new Bitmap(original);
+            }
+        }
+
+        // Step 3: Single Tesseract config that matches binary images
+        private OCRResult RecognizeUsingLibrary(Bitmap image)
+        {
+            try
+            {
+                // Find tessdata path
+                var possiblePaths = new[]
+                {
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata"),
+                    Path.Combine(Environment.CurrentDirectory, "tessdata"),
+                    Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "tessdata"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SnipperPro", "tessdata")
+                };
+
+                string dataPath = null;
+                foreach (var path in possiblePaths)
+                {
+                    if (Directory.Exists(path) && File.Exists(Path.Combine(path, "eng.traineddata")))
+                    {
+                        dataPath = path;
+                        break;
+                    }
+                }
+
+                if (dataPath == null)
+                {
+                    var pathsChecked = string.Join("; ", possiblePaths);
+                    Logger.Info($"Tessdata not found in any of these paths: {pathsChecked}");
+                    return new OCRResult
+                    {
+                        Success = false,
+                        ErrorMessage = $"Tessdata directory not found. Checked: {pathsChecked}",
+                        Text = string.Empty,
+                        Numbers = new string[0],
+                        Confidence = 0
+                    };
+                }
+
+                Logger.Info($"Using tessdata from: {dataPath}");
+
+                // Step 3: Single Tesseract config optimized for binary images
+                using (var engine = new TesseractEngine(dataPath, "eng", EngineMode.LstmOnly))
+                {
+                    engine.SetVariable("user_defined_dpi", "300");
+                    engine.SetVariable("tessedit_pageseg_mode", "6");
+                    engine.SetVariable("tessedit_do_invert", "0");
+                    
+                    using (var pix = PixConverter.ToPix(image))
+                    using (var page = engine.Process(pix))
+                    {
+                        var text = page.GetText();
+                        var confidence = page.GetMeanConfidence() * 100;
+                        
+                        // Step 4: Debug logging instead of aggressive cleaning
+                        Logger.Info($"Raw OCR text: '{text}'");
+                        Logger.Info($"OCR confidence: {confidence:F2}%");
+                        
+                        // If confidence is low, save the preprocessed image for debugging
+                        if (confidence < 60)
+                        {
+                            SaveDebugImage(image, confidence);
+                        }
+                        
+                        // Light cleaning - just trim whitespace and basic artifacts
+                        var cleanedText = text?.Trim() ?? string.Empty;
+                        cleanedText = Regex.Replace(cleanedText, @"\s+", " "); // Normalize whitespace
+                        
+                        var numbers = ExtractNumbers(cleanedText);
+                        
+                        Logger.Info($"Final OCR result: confidence={confidence:F2}%, text='{(cleanedText?.Length > 50 ? cleanedText.Substring(0, 50) + "..." : cleanedText)}'");
+
+                        return new OCRResult
+                        {
+                            Success = !string.IsNullOrWhiteSpace(cleanedText) && confidence > 30,
+                            Text = cleanedText,
+                            Numbers = numbers,
+                            Confidence = confidence
+                        };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"Tesseract library error: {ex.Message}");
+                return new OCRResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message,
+                    Text = string.Empty,
+                    Numbers = new string[0],
+                    Confidence = 0
+                };
+            }
+        }
+
+        // Step 4: Debug helper to save problematic images
+        private void SaveDebugImage(Bitmap image, double confidence)
+        {
+            try
+            {
+                var debugDir = Path.Combine(Path.GetTempPath(), "SnipperDebug");
+                Directory.CreateDirectory(debugDir);
+                
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                var debugPath = Path.Combine(debugDir, $"low_confidence_{confidence:F0}_{timestamp}.png");
+                
+                image.Save(debugPath, System.Drawing.Imaging.ImageFormat.Png);
+                Logger.Info($"Low confidence image saved for debugging: {debugPath}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"Failed to save debug image: {ex.Message}");
+            }
+        }
+
+        private string[] ExtractNumbers(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return Array.Empty<string>();
+
+            var numbers = new HashSet<string>();
+            
+            // Find all numeric patterns
+            var patterns = new[]
+            {
+                @"\$[\d,]+\.?\d*",      // Currency
+                @"\d+\.\d+",            // Decimals
+                @"\d{1,3}(,\d{3})*",    // Thousands
+                @"\d+"                   // Plain numbers
+            };
+
+            foreach (var pattern in patterns)
+            {
+                var matches = Regex.Matches(text, pattern);
+                foreach (Match match in matches)
+                {
+                    if (match.Value.Length >= 1) // At least 1 digit
+                    {
+                        numbers.Add(match.Value);
+                    }
+                }
+            }
+
+            return numbers.ToArray();
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+            }
+        }
+    }
+} 

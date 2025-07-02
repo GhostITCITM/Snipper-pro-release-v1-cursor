@@ -12,7 +12,8 @@ namespace SnipperCloneCleanFinal.Core
         Sum,
         Table,
         Validation,
-        Exception
+        Exception,
+        Image
     }
 
     public struct Rectangle

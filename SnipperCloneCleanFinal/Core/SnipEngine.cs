@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Threading.Tasks;
+using System.Collections.Generic;
 using Excel = Microsoft.Office.Interop.Excel;
 using SnipperCloneCleanFinal.Infrastructure;
 
@@ -60,6 +61,8 @@ namespace SnipperCloneCleanFinal.Core
                         return ProcessExceptionSnip();
                     case SnipMode.Validation:
                         return ProcessValidationSnip();
+                    case SnipMode.Image:
+                        return ProcessImageSnip(imageData);
                     default:
                         return SnipResult.CreateError("Unknown snip mode");
                 }
@@ -77,11 +80,21 @@ namespace SnipperCloneCleanFinal.Core
                 return SnipResult.CreateError("No image data provided");
 
             var ocrResult = _ocrEngine.RecognizeText(imageData);
-            if (!ocrResult.Success)
-                return SnipResult.CreateError($"OCR failed: {ocrResult.ErrorMessage}");
+            
+            // With our new fallback system, we should always get some result
+            // Only fail if we get a completely empty result
+            if (!ocrResult.Success && string.IsNullOrWhiteSpace(ocrResult.Text))
+            {
+                Logger.Info($"OCR returned no text: {ocrResult.ErrorMessage}");
+                // Even in this case, provide a meaningful result
+                _excelHelper.WriteToSelectedCell("[No text detected]");
+                return SnipResult.CreateSuccess("[No text detected]", ocrResult);
+            }
 
-            _excelHelper.WriteToSelectedCell(ocrResult.Text);
-            return SnipResult.CreateSuccess(ocrResult.Text, ocrResult);
+            // Use whatever text we got, even if Success = false
+            var textToUse = !string.IsNullOrWhiteSpace(ocrResult.Text) ? ocrResult.Text : "[Text detection attempted]";
+            _excelHelper.WriteToSelectedCell(textToUse);
+            return SnipResult.CreateSuccess(textToUse, ocrResult);
         }
 
         private SnipResult ProcessSumSnip(Bitmap imageData)
@@ -90,20 +103,85 @@ namespace SnipperCloneCleanFinal.Core
                 return SnipResult.CreateError("No image data provided");
 
             var ocrResult = _ocrEngine.RecognizeText(imageData);
-            if (!ocrResult.Success)
-                return SnipResult.CreateError($"OCR failed: {ocrResult.ErrorMessage}");
-
-            // Simple sum calculation - extract numbers from text
-            var numbers = System.Text.RegularExpressions.Regex.Matches(ocrResult.Text, @"\d+\.?\d*");
+            
+            // Use the enhanced number extraction from OCR result
             double sum = 0;
-            foreach (System.Text.RegularExpressions.Match match in numbers)
+            int numberCount = 0;
+            var processedNumbers = new List<double>();
+            
+            // First try to use pre-extracted numbers from OCR
+            if (ocrResult.Numbers != null && ocrResult.Numbers.Length > 0)
             {
-                if (double.TryParse(match.Value, out double number))
-                    sum += number;
+                foreach (var numStr in ocrResult.Numbers)
+                {
+                    if (double.TryParse(numStr, out double number))
+                    {
+                        sum += number;
+                        numberCount++;
+                        processedNumbers.Add(number);
+                    }
+                }
+            }
+            
+            // If no numbers from OCR extraction, try manual extraction
+            if (numberCount == 0 && !string.IsNullOrWhiteSpace(ocrResult.Text))
+            {
+                // Enhanced pattern to catch more number formats
+                var patterns = new[]
+                {
+                    @"\$?[\d,]+\.?\d*",                    // Currency with optional $
+                    @"-?\d+\.?\d+",                        // Decimals with optional negative
+                    @"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?",    // Thousands with optional decimal
+                    @"\(\d+\.?\d*\)",                      // Accounting format negative
+                    @"-?\d+"                               // Plain integers
+                };
+                
+                var foundNumbers = new HashSet<string>();
+                foreach (var pattern in patterns)
+                {
+                    var matches = System.Text.RegularExpressions.Regex.Matches(ocrResult.Text, pattern);
+                    foreach (System.Text.RegularExpressions.Match match in matches)
+                    {
+                        var value = match.Value
+                            .Replace("$", "")
+                            .Replace(",", "")
+                            .Trim();
+                        
+                        // Handle accounting format negatives
+                        if (value.StartsWith("(") && value.EndsWith(")"))
+                        {
+                            value = "-" + value.Trim('(', ')');
+                        }
+                        
+                        if (!foundNumbers.Contains(value) && double.TryParse(value, out double number))
+                        {
+                            foundNumbers.Add(value);
+                            sum += number;
+                            numberCount++;
+                            processedNumbers.Add(number);
+                        }
+                    }
+                }
             }
 
-            _excelHelper.WriteToSelectedCell(sum.ToString());
-            return SnipResult.CreateSuccess(sum.ToString(), ocrResult);
+            if (numberCount > 0)
+            {
+                // Format the sum nicely
+                var formattedSum = sum % 1 == 0 ? sum.ToString("N0") : sum.ToString("N2");
+                _excelHelper.WriteToSelectedCell(formattedSum);
+                
+                // Log the numbers found for debugging
+                Logger.Info($"Sum snip found {numberCount} numbers: {string.Join(", ", processedNumbers)}. Total: {formattedSum}");
+                
+                return SnipResult.CreateSuccess(formattedSum, ocrResult);
+            }
+            else
+            {
+                // No numbers found, but don't fail completely
+                _excelHelper.WriteToSelectedCell("[No numbers detected]");
+                Logger.Info($"Sum snip found no numbers in text: {ocrResult.Text}");
+                return SnipResult.CreateSuccess("[No numbers detected]", ocrResult);
+            }
         }
 
         private SnipResult ProcessExceptionSnip()
@@ -118,6 +196,26 @@ namespace SnipperCloneCleanFinal.Core
             const string validationMark = "✓";
             _excelHelper.WriteToSelectedCell(validationMark);
             return SnipResult.CreateSuccess(validationMark);
+        }
+
+        private SnipResult ProcessImageSnip(Bitmap imageData)
+        {
+            if (imageData == null)
+                return SnipResult.CreateError("No image data provided");
+
+            try
+            {
+                var preprocessor = new ImagePreprocessor();
+                using var cleaned = preprocessor.Clean(imageData);
+                _excelHelper.InsertPictureAtSelection(cleaned);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error inserting image snip: {ex.Message}", ex);
+                return SnipResult.CreateError($"Error inserting image: {ex.Message}");
+            }
+
+            return SnipResult.CreateSuccess("[Image inserted]");
         }
 
         public void Dispose()

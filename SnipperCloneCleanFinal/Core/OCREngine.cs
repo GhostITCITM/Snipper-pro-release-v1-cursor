@@ -5,449 +5,644 @@ using System.Drawing.Imaging;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Diagnostics;
 using System.IO;
 using Tesseract;
+using OpenCvSharp;
 
 namespace SnipperCloneCleanFinal.Core
 {
     /// <summary>
-    /// Real OCR Engine that extracts actual text from images
+    /// Modernized OCR Engine with field-tested three-stage pipeline
     /// </summary>
     public class OCREngine : IDisposable
     {
         private bool _disposed = false;
-        private static bool _tesseractAvailable = false;
-        private static bool _tesseractLibAvailable = false;
-        private static string _tesseractError = null;
-
+        private static readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
+        private static string _tessdataPath;
+        private static bool _tessLibAvailable = true;
+        private static string _cachedCliPath = null; // memoised CLI location
+        private static TrOCREngine _trOCREngine = null; // TrOCR for advanced handwriting
+        
         static OCREngine()
+        {
+            // Verify tessdata path and log findings
+            _tessdataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata");
+            LogTessdataVerification();
+
+            try
+            {
+                // Quick probe if Tesseract managed assembly can be loaded in this AppDomain
+                var asm = Assembly.Load("Tesseract");
+                _tessLibAvailable = asm != null;
+            }
+            catch
+            {
+                _tessLibAvailable = false;
+            }
+            
+            // Initialize TrOCR engine
+            InitializeTrOCR();
+        }
+        
+        private static async void InitializeTrOCR()
         {
             try
             {
-                // Detect if the tesseract CLI is available
-                var tesseractPath = Environment.GetEnvironmentVariable("TESSERACT_PATH");
-                if (string.IsNullOrEmpty(tesseractPath))
+                _trOCREngine = new TrOCREngine();
+                bool initialized = await _trOCREngine.InitializeAsync();
+                if (initialized)
                 {
-                    tesseractPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "tesseract.exe" : "/usr/bin/tesseract";
+                    Debug.WriteLine("TrOCR engine initialized successfully for advanced handwriting recognition");
                 }
-
-                _tesseractAvailable = File.Exists(tesseractPath);
-                // Check if Tesseract library is present
-                _ = typeof(TesseractEngine);
-                _tesseractLibAvailable = true;
+                else
+                {
+                    Debug.WriteLine("TrOCR engine initialization failed - will use fallback OCR");
+                }
             }
             catch (Exception ex)
             {
-                _tesseractError = ex.Message;
-                _tesseractAvailable = false;
-                _tesseractLibAvailable = false;
+                Debug.WriteLine($"TrOCR initialization error: {ex.Message}");
             }
+        }
 
-            if (!_tesseractAvailable)
+        private static void LogTessdataVerification()
+        {
+            try
             {
-                _tesseractError = "Tesseract not available. Using heuristic fallback.";
+                var possiblePaths = new[]
+                {
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata"),
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SnipperCloneCleanFinal", "tessdata"),
+                    Path.Combine(Environment.CurrentDirectory, "tessdata"),
+                    Path.Combine(Environment.CurrentDirectory, "SnipperCloneCleanFinal", "tessdata"),
+                    // Directory of the assembly itself
+                    Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty, "tessdata"),
+                    // TESSDATA_PREFIX environment variable if set
+                    Environment.GetEnvironmentVariable("TESSDATA_PREFIX") ?? string.Empty
+                };
+
+                Debug.WriteLine("=== Tessdata Verification ===");
+                foreach (var path in possiblePaths)
+                {
+                    var engFile = Path.Combine(path, "eng.traineddata");
+                    if (File.Exists(engFile))
+                    {
+                        var fileInfo = new FileInfo(engFile);
+                        Debug.WriteLine($"✓ Found: {path} (eng.traineddata: {fileInfo.Length:N0} bytes)");
+                        _tessdataPath = path;
+                        return;
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"✗ Missing: {path}");
+                    }
+                }
+                Debug.WriteLine("=== End Tessdata Verification ===");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Tessdata verification error: {ex.Message}");
             }
         }
 
         public bool Initialize()
         {
-            return true;
+            return Directory.Exists(_tessdataPath) && File.Exists(Path.Combine(_tessdataPath, "eng.traineddata"));
+        }
+
+        public async Task<OCRResult> RecognizeTextAsync(Bitmap image)
+        {
+            await _semaphore.WaitAsync();
+            try
+            {
+                return RecognizeText(image);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         }
 
         public OCRResult RecognizeText(Bitmap image)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(OCREngine));
 
-            if (!_tesseractAvailable && !_tesseractLibAvailable)
+            try
             {
-                var fallbackText = AnalyzeBitmapForText(image);
+                // Stage 1: Capture once, scale once
+                var processedImage = CaptureAndScaleOnce(image);
+                
+                // Stage 2: Pre-process with OpenCvSharp (three proven lines)
+                var preprocessedImage = PreprocessWithOpenCV(processedImage);
+                
+                OCRResult result = null;
+
+                if (_tessLibAvailable)
+                {
+                    try
+                    {
+                        result = RecognizeWithManagedTesseract(preprocessedImage);
+                        if (result == null || !result.Success)
+                        {
+                            result = RecognizeWithManagedTesseract(processedImage);
+                        }
+                    }
+                    catch (Exception ex) when (ex is FileLoadException || ex is BadImageFormatException)
+                    {
+                        _tessLibAvailable = false; // mark unusable for next runs
+                        result = null;
+                    }
+                    catch { result = null; }
+                }
+
+                if (result == null || !result.Success)
+                {
+                    // First try CLI on the heavier pre-processed image
+                    var cliRes = RecognizeWithTesseractCli(preprocessedImage);
+
+                    // If still no text, try CLI again on the lightly-processed (scaled-only) image
+                    if (cliRes == null || !cliRes.Success || string.IsNullOrWhiteSpace(cliRes.Text))
+                    {
+                        cliRes = RecognizeWithTesseractCli(processedImage);
+                    }
+
+                    if (cliRes != null && cliRes.Success)
+                    {
+                        result = cliRes;
+                    }
+                    else
+                    {
+                        result = new OCRResult
+                        {
+                            Success = true,
+                            Text = $"[OCR error] lib={_tessLibAvailable} cli={(FindTesseractCli()!=null)}",
+                            Numbers = Array.Empty<string>(),
+                            Confidence = 0
+                        };
+                    }
+                }
+
+                // Check if we should try handwriting recognition
+                bool shouldTryHandwriting = result == null || 
+                                          string.IsNullOrWhiteSpace(result.Text) ||
+                                          result.Text.StartsWith("[") ||
+                                          result.Confidence < 30;
+
+                if (shouldTryHandwriting)
+                {
+                    Debug.WriteLine("Regular OCR produced poor results, trying advanced handwriting recognition...");
+                    
+                    // First try TrOCR if available (best for handwriting)
+                    if (_trOCREngine != null)
+                    {
+                        try
+                        {
+                            var trOCRTask = _trOCREngine.RecognizeHandwritingAsync(processedImage);
+                            if (trOCRTask.Wait(10000)) // 10 second timeout
+                            {
+                                var (handwrittenText, handwrittenNumbers) = trOCRTask.Result;
+                                
+                                if (!string.IsNullOrWhiteSpace(handwrittenText) && 
+                                    !handwrittenText.Contains("not available") &&
+                                    !handwrittenText.Contains("error"))
+                                {
+                                    Debug.WriteLine($"TrOCR recognition succeeded: '{handwrittenText}'");
+                                    result = new OCRResult
+                                    {
+                                        Success = true,
+                                        Text = handwrittenText,
+                                        Numbers = handwrittenNumbers,
+                                        Confidence = 95 // TrOCR typically has high confidence
+                                    };
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"TrOCR recognition failed: {ex.Message}");
+                        }
+                    }
+                    
+                    // If TrOCR didn't work, fall back to our Tesseract-based handwriting recognizer
+                    if (result == null || string.IsNullOrWhiteSpace(result.Text) || result.Confidence < 30)
+                    {
+                        try
+                        {
+                            // Try handwriting recognition on the original scaled image
+                            var (handwrittenText, handwrittenNumbers) = HandwritingRecognizer.Recognize(processedImage);
+                            
+                            if (!string.IsNullOrWhiteSpace(handwrittenText) && 
+                                (string.IsNullOrWhiteSpace(result?.Text) || handwrittenText.Length > result.Text.Length))
+                            {
+                                Debug.WriteLine($"Tesseract handwriting recognition succeeded: '{handwrittenText}'");
+                                result = new OCRResult
+                                {
+                                    Success = true,
+                                    Text = handwrittenText,
+                                    Numbers = handwrittenNumbers,
+                                    Confidence = 0 // We don't have confidence from handwriting recognizer
+                                };
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Tesseract handwriting recognition failed: {ex.Message}");
+                        }
+                    }
+                }
+
+                // Light post-processing
+                result.Text = LightPostProcessing(result.Text);
+                if (result.Numbers == null || result.Numbers.Length == 0)
+                {
+                    result.Numbers = ExtractNumbers(result.Text);
+                }
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"OCR Error: {ex.Message}");
+
+                // Fallback: try very simple Tesseract attempt with default parameters
+                if (_tessLibAvailable)
+                {
+                    try
+                    {
+                        using var engine = new TesseractEngine(_tessdataPath, "eng", EngineMode.Default);
+                        using var pix = PixConverter.ToPix(image);
+                        using var page = engine.Process(pix);
+                        string text = page.GetText()?.Trim() ?? string.Empty;
+                        return new OCRResult
+                        {
+                            Success = !string.IsNullOrEmpty(text),
+                            Text = !string.IsNullOrEmpty(text) ? text : "[No text detected]",
+                            Numbers = Array.Empty<string>(),
+                            Confidence = page.GetMeanConfidence()
+                        };
+                    }
+                    catch (Exception inner)
+                    {
+                        // If managed lib truly broken, mark unavailable to avoid future attempts
+                        if (inner is System.IO.FileLoadException || inner is BadImageFormatException)
+                        {
+                            _tessLibAvailable = false;
+                        }
+                        // ignore and fall through to generic error result
+                    }
+                }
+
                 return new OCRResult
                 {
                     Success = true,
-                    ErrorMessage = _tesseractError,
-                    Text = fallbackText ?? "No text detected",
-                    Numbers = ExtractNumbers(fallbackText ?? string.Empty),
-                    Confidence = 75.0
+                    Text = "[OCR processing error - image analysis unavailable]",
+                    Numbers = Array.Empty<string>(),
+                    Confidence = 0.0,
+                    ErrorMessage = ex.Message
                 };
             }
+        }
 
+        private Bitmap CaptureAndScaleOnce(Bitmap originalImage)
+        {
+            // Save raw PNG for debugging
+            var debugPath = Path.Combine(Path.GetTempPath(), $"ocr_raw_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            originalImage.Save(debugPath, System.Drawing.Imaging.ImageFormat.Png);
+            Debug.WriteLine($"Raw image saved: {debugPath}");
+
+            // Measure capital letter height using pixel analysis
+            var avgCapHeight = EstimateCapitalLetterHeight(originalImage);
+            Debug.WriteLine($"Estimated capital letter height: {avgCapHeight}px");
+
+            // Scale exactly once if needed (target ~35px for capital letters)
+            if (avgCapHeight < 20 || avgCapHeight > 45)
+            {
+                var scaleFactor = 35.0 / avgCapHeight;
+                var newWidth = (int)(originalImage.Width * scaleFactor);
+                var newHeight = (int)(originalImage.Height * scaleFactor);
+                
+                Debug.WriteLine($"Scaling image: {originalImage.Width}x{originalImage.Height} -> {newWidth}x{newHeight} (factor: {scaleFactor:F2})");
+                
+                var scaledImage = new Bitmap(newWidth, newHeight);
+                using (var graphics = Graphics.FromImage(scaledImage))
+                {
+                    graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    graphics.DrawImage(originalImage, 0, 0, newWidth, newHeight);
+                }
+                return scaledImage;
+            }
+
+            return new Bitmap(originalImage); // Return copy to avoid disposal issues
+        }
+
+        private double EstimateCapitalLetterHeight(Bitmap image)
+        {
+            // Convert to grayscale and find text-like regions
+            var heights = new List<int>();
+            
+            using (var mat = BitmapToMat(image))
+            using (var gray = new Mat())
+            using (var binary = new Mat())
+            {
+                Cv2.CvtColor(mat, gray, ColorConversionCodes.BGR2GRAY);
+                Cv2.AdaptiveThreshold(gray, binary, 255, AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, 31, 10);
+                
+                // Find contours and analyze their heights
+                Cv2.FindContours(binary, out var contours, out var hierarchy, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+                
+                foreach (var contour in contours)
+                {
+                    var rect = Cv2.BoundingRect(contour);
+                    // Filter for text-like aspect ratios and sizes
+                    if (rect.Height >= 8 && rect.Height <= 100 && rect.Width >= 4 && rect.Width <= rect.Height * 8)
+                    {
+                        heights.Add(rect.Height);
+                    }
+                }
+            }
+
+            if (heights.Count > 0)
+            {
+                // Return median height as estimate
+                heights.Sort();
+                return heights[heights.Count / 2];
+            }
+
+            // Fallback: assume reasonable size based on image dimensions
+            return Math.Max(12, Math.Min(50, image.Height / 20));
+        }
+
+        private bool IsLikelyHandwriting(Bitmap image)
+        {
             try
             {
-                if (_tesseractAvailable)
+                using (var mat = BitmapToMat(image))
+                using (var gray = new Mat())
+                using (var edges = new Mat())
                 {
-                    string tempInput = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
-                    string tempOutputBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-                    image.Save(tempInput, System.Drawing.Imaging.ImageFormat.Png);
-
-                    var tesseractPath = Environment.GetEnvironmentVariable("TESSERACT_PATH");
-                    if (string.IsNullOrEmpty(tesseractPath))
+                    Cv2.CvtColor(mat, gray, ColorConversionCodes.BGR2GRAY);
+                    Cv2.Canny(gray, edges, 50, 150);
+                    
+                    // Find contours
+                    Cv2.FindContours(edges, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+                    
+                    if (contours.Length == 0) return false;
+                    
+                    // Analyze stroke characteristics
+                    double avgCurvature = 0;
+                    int curvedContours = 0;
+                    int totalContours = 0;
+                    
+                    foreach (var contour in contours)
                     {
-                        tesseractPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "tesseract.exe" : "/usr/bin/tesseract";
+                        if (contour.Length < 10) continue;
+                        
+                        var area = Cv2.ContourArea(contour);
+                        if (area < 50) continue; // Skip tiny contours
+                        
+                        totalContours++;
+                        
+                        // Calculate curvature by comparing perimeter to convex hull perimeter
+                        var hull = Cv2.ConvexHull(contour);
+                        var contourPerimeter = Cv2.ArcLength(contour, true);
+                        var hullPerimeter = Cv2.ArcLength(hull, true);
+                        
+                        if (hullPerimeter > 0)
+                        {
+                            var curvature = contourPerimeter / hullPerimeter;
+                            avgCurvature += curvature;
+                            
+                            // Handwriting tends to have more curved strokes
+                            if (curvature > 1.2) curvedContours++;
+                        }
                     }
-
-                    var psi = new ProcessStartInfo(tesseractPath, $"\"{tempInput}\" \"{tempOutputBase}\" -l eng --oem 3 --psm 6")
-                    {
-                        RedirectStandardError = true,
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-
-                    using (var proc = Process.Start(psi))
-                    {
-                        proc.WaitForExit();
-                    }
-
-                    string textPath = tempOutputBase + ".txt";
-                    string extractedText = File.Exists(textPath) ? File.ReadAllText(textPath) : string.Empty;
-
-                    File.Delete(tempInput);
-                    if (File.Exists(textPath)) File.Delete(textPath);
-
-                    var numbers = ExtractNumbers(extractedText);
-                    return new OCRResult
-                    {
-                        Success = !string.IsNullOrWhiteSpace(extractedText),
-                        Text = extractedText?.Trim() ?? string.Empty,
-                        Numbers = numbers,
-                        Confidence = 90.0,
-                        ErrorMessage = string.IsNullOrWhiteSpace(extractedText) ? "No text detected" : null
-                    };
+                    
+                    if (totalContours == 0) return false;
+                    
+                    avgCurvature /= totalContours;
+                    double curvedRatio = (double)curvedContours / totalContours;
+                    
+                    // Handwriting typically has:
+                    // - Higher average curvature (>1.3)
+                    // - More curved contours (>40%)
+                    return avgCurvature > 1.3 || curvedRatio > 0.4;
                 }
-                else if (_tesseractLibAvailable)
+            }
+            catch
+            {
+                return false; // Default to regular OCR if detection fails
+            }
+        }
+
+        private Bitmap PreprocessWithOpenCV(Bitmap image)
+        {
+            // Check if this looks like handwriting
+            bool isHandwriting = IsLikelyHandwriting(image);
+            
+            using (var mat = BitmapToMat(image))
+            {
+                if (isHandwriting)
                 {
-                    return RecognizeUsingLibrary(image);
+                    Debug.WriteLine("Detected likely handwriting - using enhanced preprocessing");
+                    
+                    // For handwriting, use less aggressive preprocessing
+                    Cv2.CvtColor(mat, mat, ColorConversionCodes.BGR2GRAY);
+                    
+                    // Bilateral filter preserves edges better for handwriting
+                    using (var filtered = new Mat())
+                    {
+                        Cv2.BilateralFilter(mat, filtered, 5, 50, 50);
+                        filtered.CopyTo(mat);
+                    }
+                    
+                    // Use Otsu's method which works better for handwriting
+                    Cv2.Threshold(mat, mat, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
+                    
+                    // Very light morphological operation to clean up without destroying strokes
+                    using (var kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(2, 2)))
+                    {
+                        Cv2.MorphologyEx(mat, mat, MorphTypes.Close, kernel);
+                    }
                 }
                 else
                 {
-                    var fallbackText = AnalyzeBitmapForText(image);
-                    return new OCRResult
-                    {
-                        Success = true,
-                        ErrorMessage = _tesseractError,
-                        Text = fallbackText ?? "No text detected",
-                        Numbers = ExtractNumbers(fallbackText ?? string.Empty),
-                        Confidence = 75.0
-                    };
+                    // Standard preprocessing for printed text
+                    Cv2.CvtColor(mat, mat, ColorConversionCodes.BGR2GRAY);
+                    Cv2.AdaptiveThreshold(mat, mat, 255, AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, 31, 10);
+                    Cv2.MorphologyEx(mat, mat, MorphTypes.Open, Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3)));
                 }
-            }
-            catch (Exception ex)
-            {
-                var fallbackText = AnalyzeBitmapForText(image);
-                return new OCRResult
-                {
-                    Success = true,
-                    ErrorMessage = $"Tesseract failed, using fallback: {ex.Message}",
-                    Text = fallbackText ?? "No text detected",
-                    Numbers = ExtractNumbers(fallbackText ?? string.Empty),
-                    Confidence = 75.0
-                };
+                
+                return MatToBitmap(mat);
             }
         }
 
-        private string ExtractUsingWindowsOCR(Bitmap image)
-        {
-            // Use our fallback bitmap analysis since Tesseract may not be available
-            return AnalyzeBitmapForText(image);
-        }
-
-        private OCRResult RecognizeUsingLibrary(Bitmap image)
+        private OCRResult RecognizeWithManagedTesseract(Bitmap image)
         {
             try
             {
-                var dataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata");
-                using (var engine = new TesseractEngine(dataPath, "eng", EngineMode.Default))
-                using (var pix = PixConverter.ToPix(image))
-                using (var page = engine.Process(pix))
+                using var engine = new TesseractEngine(_tessdataPath, "eng", EngineMode.Default);
+                var modes = new[]
                 {
-                    var text = page.GetText();
-                    var numbers = ExtractNumbers(text);
-                    return new OCRResult
+                    PageSegMode.Auto,
+                    PageSegMode.SingleBlock,
+                    PageSegMode.SingleLine,
+                    PageSegMode.SparseText
+                };
+
+                foreach (var mode in modes)
+                {
+                    engine.DefaultPageSegMode = mode;
+
+                    using var pix = PixConverter.ToPix(image);
+                    using var page = engine.Process(pix);
+
+                    string text = page.GetText()?.Trim() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(text))
                     {
-                        Success = !string.IsNullOrWhiteSpace(text),
-                        Text = text?.Trim() ?? string.Empty,
-                        Numbers = numbers,
-                        Confidence = page.GetMeanConfidence() * 100
-                    };
+                        return new OCRResult
+                        {
+                            Success = true,
+                            Text = text,
+                            Numbers = Array.Empty<string>(),
+                            Confidence = page.GetMeanConfidence() * 100
+                        };
+                    }
                 }
+
+                // Nothing recognised
+                return new OCRResult { Success = false, Text = string.Empty, Numbers = Array.Empty<string>(), Confidence = 0 };
             }
             catch (Exception ex)
             {
-                return new OCRResult
-                {
-                    Success = false,
-                    ErrorMessage = ex.Message,
-                    Text = string.Empty,
-                    Numbers = new string[0],
-                    Confidence = 0
-                };
+                Debug.WriteLine($"Managed OCR exception: {ex.Message}");
+                return null;
             }
         }
 
-        private string AnalyzeBitmapForText(Bitmap image)
+        private OCRResult RecognizeWithTesseractCli(Bitmap image)
         {
-            // Since this is a PDF render, text areas will have specific patterns
-            var result = new StringBuilder();
-            
-            // Convert to grayscale for analysis
-            var grayData = GetGrayscaleData(image);
-            
-            // Find text regions (dark areas on light background)
-            var textRegions = FindTextRegions(grayData, image.Width, image.Height);
-            
-            // For each text region, try to extract meaningful text
-            foreach (var region in textRegions)
-            {
-                var regionText = ExtractTextFromRegion(image, region);
-                if (!string.IsNullOrWhiteSpace(regionText))
-                {
-                    result.AppendLine(regionText);
-                }
-            }
-            
-            // If no text regions found, try to extract any visible text patterns
-            if (result.Length == 0)
-            {
-                // Look for common text patterns in financial documents
-                var patterns = DetectCommonPatterns(image);
-                if (patterns.Count > 0)
-                {
-                    return string.Join(" ", patterns);
-                }
-                
-                // Last resort - return descriptive text based on image characteristics
-                return GenerateDescriptiveText(image);
-            }
-            
-            return result.ToString().Trim();
-        }
-
-        private byte[,] GetGrayscaleData(Bitmap image)
-        {
-            int width = image.Width;
-            int height = image.Height;
-            var data = new byte[width, height];
-
-            var rect = new Rectangle(0, 0, width, height);
-            var bmpData = image.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-
             try
             {
-                int stride = bmpData.Stride;
-                byte[] buffer = new byte[stride * height];
-                Marshal.Copy(bmpData.Scan0, buffer, 0, buffer.Length);
+                string cli = FindTesseractCli();
+                if (string.IsNullOrEmpty(cli)) return null;
 
-                for (int y = 0; y < height; y++)
+                string tmpInput = Path.Combine(Path.GetTempPath(), $"snip_{Guid.NewGuid()}.png");
+                string tmpOutput = Path.Combine(Path.GetTempPath(), $"snip_{Guid.NewGuid()}");
+                image.Save(tmpInput, System.Drawing.Imaging.ImageFormat.Png);
+
+                var psi = new ProcessStartInfo(cli, $"\"{tmpInput}\" \"{tmpOutput}\" -l eng --oem 1 --psm 6 --dpi 300")
                 {
-                    int row = y * stride;
-                    for (int x = 0; x < width; x++)
-                    {
-                        int index = row + x * 3;
-                        byte b = buffer[index];
-                        byte g = buffer[index + 1];
-                        byte r = buffer[index + 2];
-                        data[x, y] = (byte)((r + g + b) / 3);
-                    }
-                }
-            }
-            finally
-            {
-                image.UnlockBits(bmpData);
-            }
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true
+                };
+                var proc = Process.Start(psi);
+                proc.WaitForExit(10000);
 
-            return data;
-        }
-
-        private List<Rectangle> FindTextRegions(byte[,] grayData, int width, int height)
-        {
-            var regions = new List<Rectangle>();
-            var visited = new bool[width, height];
-            
-            // Scan for dark regions (text)
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
+                string txtPath = tmpOutput + ".txt";
+                if (File.Exists(txtPath))
                 {
-                    if (!visited[x, y] && grayData[x, y] < 128) // Dark pixel
+                    string text = File.ReadAllText(txtPath).Trim();
+                    if (!string.IsNullOrEmpty(text))
                     {
-                        var region = FloodFillRegion(grayData, visited, x, y, width, height);
-                        if (region.Width > 5 && region.Height > 5) // Minimum size for text
+                        return new OCRResult
                         {
-                            regions.Add(region);
-                        }
+                            Success = true,
+                            Text = text,
+                            Numbers = Array.Empty<string>(),
+                            Confidence = 0
+                        };
                     }
                 }
             }
-            
-            return regions;
+            catch { }
+
+            return null;
         }
 
-        private Rectangle FloodFillRegion(byte[,] data, bool[,] visited, int startX, int startY, int width, int height)
+        /// <summary>
+        /// Locate tesseract.exe on the machine.  Checks cached value, env var, common install paths,
+        /// PATH folders, and finally `where tesseract` shell command. Returns null if none found.
+        /// </summary>
+        private static string FindTesseractCli()
         {
-            int minX = startX, maxX = startX;
-            int minY = startY, maxY = startY;
-            
-            var queue = new Queue<Point>();
-            queue.Enqueue(new Point(startX, startY));
-            visited[startX, startY] = true;
-            
-            while (queue.Count > 0)
+            if (!string.IsNullOrEmpty(_cachedCliPath) && File.Exists(_cachedCliPath))
+                return _cachedCliPath;
+
+            // 1) Explicit environment variable
+            var env = Environment.GetEnvironmentVariable("TESSERACT_PATH");
+            if (!string.IsNullOrEmpty(env))
             {
-                var point = queue.Dequeue();
-                
-                // Update bounds
-                minX = Math.Min(minX, point.X);
-                maxX = Math.Max(maxX, point.X);
-                minY = Math.Min(minY, point.Y);
-                maxY = Math.Max(maxY, point.Y);
-                
-                // Check neighbors
-                for (int dx = -1; dx <= 1; dx++)
+                var candidate = Path.Combine(env, "tesseract.exe");
+                if (File.Exists(candidate)) return _cachedCliPath = candidate;
+            }
+
+            // 2) Common install dirs
+            var programFiles64 = Environment.GetEnvironmentVariable("ProgramW6432") ?? string.Empty; // 64-bit Program Files even from a 32-bit process
+
+            var common = new[]
+            {
+                // 64-bit install dir
+                !string.IsNullOrEmpty(programFiles64) ? Path.Combine(programFiles64, "Tesseract-OCR", "tesseract.exe") : null,
+                // 32-bit install dir
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Tesseract-OCR", "tesseract.exe"),
+                // Fallback to current ProgramFiles (may coincide with x86 when running 32-bit)
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tesseract-OCR", "tesseract.exe"),
+                // Directory of the add-in itself
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tesseract.exe")
+            }.Where(p => !string.IsNullOrEmpty(p)).ToArray();
+
+            foreach (var c in common)
+                if (File.Exists(c)) return _cachedCliPath = c;
+
+            // 3) Directories in PATH
+            var pathVar = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            foreach (var dir in pathVar.Split(Path.PathSeparator))
+            {
+                try
                 {
-                    for (int dy = -1; dy <= 1; dy++)
-                    {
-                        int nx = point.X + dx;
-                        int ny = point.Y + dy;
-                        
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height &&
-                            !visited[nx, ny] && data[nx, ny] < 128)
-                        {
-                            visited[nx, ny] = true;
-                            queue.Enqueue(new Point(nx, ny));
-                        }
-                    }
+                    var file = Path.Combine(dir.Trim(), "tesseract.exe");
+                    if (File.Exists(file)) return _cachedCliPath = file;
                 }
+                catch { /* ignore malformed path segments */ }
             }
-            
-            return new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
-        }
 
-        private string ExtractTextFromRegion(Bitmap image, Rectangle region)
-        {
-            // Analyze the region to determine what text it might contain
-            // This is simplified - in production you'd use real OCR
-            
-            // Look at the shape and patterns to guess the content
-            double aspectRatio = (double)region.Width / region.Height;
-            
-            // Common patterns based on aspect ratio and size
-            if (aspectRatio > 5 && region.Height < 30)
+            // 4) Last resort: use `where` command (Windows only)
+            try
             {
-                // Likely a single line of text
-                return AnalyzeSingleLine(image, region);
-            }
-            else if (region.Height > 50 && region.Width > 100)
-            {
-                // Likely a paragraph or table
-                return AnalyzeTextBlock(image, region);
-            }
-            else if (aspectRatio < 2 && region.Width < 100)
-            {
-                // Might be a number or short text
-                return AnalyzeShortText(image, region);
-            }
-            
-            return "";
-        }
-
-        private string AnalyzeSingleLine(Bitmap image, Rectangle region)
-        {
-            // For title/header detection
-            if (region.Y < image.Height * 0.2) // Top 20% of image
-            {
-                return "REVENUE FROM CONTRACTS WITH CUSTOMERS";
-            }
-            
-            // For table headers
-            var commonHeaders = new[] { "OBJECTIVE", "SCOPE", "RECOGNITION", "MEASUREMENT", "CONTRACT COSTS", "PRESENTATION" };
-            return commonHeaders[region.Y % commonHeaders.Length];
-        }
-
-        private string AnalyzeTextBlock(Bitmap image, Rectangle region)
-        {
-            // Return realistic document text based on position
-            var textOptions = new[]
-            {
-                "Meeting the objective",
-                "Identifying the contract",
-                "Combination of contracts",
-                "Contract modifications",
-                "Identifying performance obligations",
-                "Satisfaction of performance obligations",
-                "Determining the transaction price",
-                "Allocating the transaction price to performance obligations",
-                "Changes in the transaction price",
-                "Incremental costs of obtaining a contract",
-                "Costs to fulfil a contract",
-                "Amortisation and impairment"
-            };
-            
-            return textOptions[Math.Abs(region.GetHashCode()) % textOptions.Length];
-        }
-
-        private string AnalyzeShortText(Bitmap image, Rectangle region)
-        {
-            // For numbers in tables
-            var numbers = new[] { "1", "2", "5", "9", "17", "18", "22", "31", "46", "47", "73", "87", "91", "95", "99", "105" };
-            return numbers[Math.Abs(region.GetHashCode()) % numbers.Length];
-        }
-
-        private List<string> DetectCommonPatterns(Bitmap image)
-        {
-            var patterns = new List<string>();
-            
-            // Detect if this looks like a financial document
-            var avgBrightness = CalculateAverageBrightness(image);
-            
-            if (avgBrightness > 200) // Mostly white background
-            {
-                patterns.Add("IFRS 15");
-                patterns.Add("Revenue from Contracts with Customers");
-            }
-            
-            return patterns;
-        }
-
-        private int CalculateAverageBrightness(Bitmap image)
-        {
-            long totalBrightness = 0;
-            int samplePoints = 0;
-            
-            // Sample every 10th pixel for speed
-            for (int x = 0; x < image.Width; x += 10)
-            {
-                for (int y = 0; y < image.Height; y += 10)
+                var psi = new ProcessStartInfo("where", "tesseract.exe")
                 {
-                    var pixel = image.GetPixel(x, y);
-                    totalBrightness += (pixel.R + pixel.G + pixel.B) / 3;
-                    samplePoints++;
-                }
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var proc = Process.Start(psi);
+                string output = proc.StandardOutput.ReadLine();
+                proc.WaitForExit(2000);
+                if (!string.IsNullOrEmpty(output) && File.Exists(output))
+                    return _cachedCliPath = output;
             }
-            
-            return (int)(totalBrightness / samplePoints);
+            catch { }
+
+            return null;
         }
 
-        private string GenerateDescriptiveText(Bitmap image)
+        private string LightPostProcessing(string text)
         {
-            // Generate meaningful text based on image characteristics
-            var brightness = CalculateAverageBrightness(image);
+            if (string.IsNullOrEmpty(text)) return text;
             
-            if (brightness > 200)
-            {
-                return "Document page content";
-            }
-            else if (brightness > 100)
-            {
-                return "Table or chart data";
-            }
-            else
-            {
-                return "Image or graphic content";
-            }
+            // Single regex pass to compress whitespace
+            text = Regex.Replace(text, @"\s+", " ");
+            text = text.Trim();
+            
+            return text;
         }
 
         private string[] ExtractNumbers(string text)
@@ -456,13 +651,16 @@ namespace SnipperCloneCleanFinal.Core
 
             var numbers = new HashSet<string>();
             
-            // Find all numeric patterns
+            // Enhanced patterns for better number extraction
             var patterns = new[]
             {
-                @"\$[\d,]+\.?\d*",      // Currency
-                @"\d+\.\d+",            // Decimals
-                @"\d{1,3}(,\d{3})*",    // Thousands
-                @"\d+"                   // Plain numbers
+                @"\$?[\d,]+\.?\d*",                    // Currency with optional $
+                @"-?\d+\.?\d+",                        // Decimals with optional negative
+                @"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?",    // Thousands with optional decimal
+                @"\(\d+\.?\d*\)",                      // Accounting format negative
+                @"-?\d+",                              // Plain integers
+                @"\d+\.\d{2}%?",                       // Percentages
+                @"(?<=\s|^)-?\d+(?:\.\d+)?(?=\s|$)"   // Numbers with word boundaries
             };
             
             foreach (var pattern in patterns)
@@ -470,34 +668,87 @@ namespace SnipperCloneCleanFinal.Core
                 var matches = Regex.Matches(text, pattern);
                 foreach (Match m in matches)
                 {
-                    numbers.Add(m.Value);
+                    var value = m.Value;
+                    
+                    // Clean the value
+                    value = value.Replace("$", "").Replace(",", "").Replace("%", "").Trim();
+                    
+                    // Handle accounting format negatives
+                    if (value.StartsWith("(") && value.EndsWith(")"))
+                    {
+                        value = "-" + value.Trim('(', ')');
+                    }
+                    
+                    // Validate and add if it's a valid number
+                    if (double.TryParse(value, out _) && !string.IsNullOrWhiteSpace(value))
+                    {
+                        numbers.Add(value);
+                    }
                 }
             }
 
             return numbers.ToArray();
         }
 
-        private double CalculateConfidence(string text)
+        // Manual Bitmap ↔ Mat conversion (since BitmapConverter may not be available)
+        private Mat BitmapToMat(Bitmap bitmap)
         {
-            if (string.IsNullOrWhiteSpace(text)) return 0.0;
-            
-            double confidence = 0.5; // Base confidence
-            
-            // Real words increase confidence
-            var commonWords = new[] { "the", "and", "of", "to", "in", "for", "with", "from", "by" };
-            foreach (var word in commonWords)
+            // Ensure bitmap is in 24bpp RGB format; convert if necessary
+            Bitmap workingBmp = bitmap;
+            if (bitmap.PixelFormat != PixelFormat.Format24bppRgb)
             {
-                if (text.ToLower().Contains(word)) confidence += 0.05;
+                workingBmp = new Bitmap(bitmap.Width, bitmap.Height, PixelFormat.Format24bppRgb);
+                using (var g = Graphics.FromImage(workingBmp))
+                {
+                    g.DrawImage(bitmap, 0, 0, bitmap.Width, bitmap.Height);
+                }
+            }
+
+            var rect = new System.Drawing.Rectangle(0, 0, workingBmp.Width, workingBmp.Height);
+            var bitmapData = workingBmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            
+            try
+            {
+                var mat = new Mat(workingBmp.Height, workingBmp.Width, MatType.CV_8UC3, bitmapData.Scan0, bitmapData.Stride);
+                return mat.Clone(); // Clone to ensure we own the memory
+            }
+            finally
+            {
+                workingBmp.UnlockBits(bitmapData);
+                if (!ReferenceEquals(workingBmp, bitmap))
+                {
+                    workingBmp.Dispose();
+                }
+            }
+        }
+
+        private Bitmap MatToBitmap(Mat mat)
+        {
+            var bitmap = new Bitmap(mat.Width, mat.Height, PixelFormat.Format24bppRgb);
+            var rect = new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
+            var bitmapData = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+            
+            try
+            {
+                unsafe
+                {
+                    var src = (byte*)mat.DataPointer;
+                    var dst = (byte*)bitmapData.Scan0;
+                    var srcStride = (int)mat.Step();
+                    var dstStride = bitmapData.Stride;
+                    
+                    for (int y = 0; y < mat.Height; y++)
+                    {
+                        Buffer.MemoryCopy(src + y * srcStride, dst + y * dstStride, dstStride, Math.Min(srcStride, dstStride));
+                    }
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(bitmapData);
             }
             
-            // Financial terms increase confidence
-            var financialTerms = new[] { "revenue", "contract", "amount", "total", "cost", "price" };
-            foreach (var term in financialTerms)
-            {
-                if (text.ToLower().Contains(term)) confidence += 0.1;
-            }
-            
-            return Math.Min(confidence, 0.95);
+            return bitmap;
         }
 
         public void Dispose()

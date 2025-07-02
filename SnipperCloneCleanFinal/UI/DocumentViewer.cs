@@ -18,7 +18,7 @@ namespace SnipperCloneCleanFinal.UI
 {
     public partial class DocumentViewer : Form
     {
-        private const int PDF_RENDER_DPI = 150; // DPI used when rendering PDF pages – keep in sync for accurate coordinate mapping
+        private const int PDF_RENDER_DPI = 300; // High quality DPI for better OCR accuracy
         private readonly SnipEngine _snippEngine;
         private readonly OCREngine _ocrEngine;
         private Panel _documentsPanel;
@@ -84,18 +84,10 @@ namespace SnipperCloneCleanFinal.UI
         private readonly Bitmap _trashIcon;         // loaded once
         private readonly Pen _trashBorder = new Pen(Color.Black, 1);
         private List<SnipRecord> _permanentSnips = new List<SnipRecord>();
+        private bool _isProcessingSnip = false;
 
         public event EventHandler<SnipAreaSelectedEventArgs> SnipAreaSelected;
-        public event EventHandler<SnipMovedEventArgs> SnipMoved;
         public event EventHandler<SnipClickedEventArgs> SnipClicked;
-
-        private SnipRecord _draggingSnip;
-        private SnipRecord _resizingSnip;
-        private ResizeHandle _resizeHandle = ResizeHandle.None;
-        private Point _dragStart;
-        private bool _draggedDuringClick = false;
-
-        private const int HANDLE_SIZE = 6; // px for resize handles
 
         public DocumentViewer(SnipEngine snippEngine)
         {
@@ -557,7 +549,15 @@ namespace SnipperCloneCleanFinal.UI
                 }
                 else if (new[] { ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif" }.Contains(extension))
                 {
-                    return LoadImageDocument(filePath);
+                    // Convert image to a temporary searchable PDF and load that instead
+                    string pdfPath = SnipperCloneCleanFinal.Core.ImageToPdfConverter.Convert(filePath);
+                    var loaded = await LoadPdfDocument(pdfPath);
+                    // Preserve original image name for UI clarity
+                    if (loaded != null)
+                    {
+                        loaded.Name = Path.GetFileName(filePath);
+                    }
+                    return loaded;
                 }
                 
                 return null;
@@ -629,8 +629,8 @@ namespace SnipperCloneCleanFinal.UI
                 using (var document = PdfiumViewer.PdfDocument.Load(pdfPath))
                 {
                     Logger.Info($"PDF loaded successfully, {document.PageCount} pages");
-                    var dpiX = 150; // High quality rendering
-                    var dpiY = 150;
+                    var dpiX = 300; // High quality rendering for better OCR
+                    var dpiY = 300;
                     
                     for (int pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
                     {
@@ -1015,6 +1015,9 @@ namespace SnipperCloneCleanFinal.UI
                 _currentDocument = _loadedDocuments[_documentSelector.SelectedIndex];
                 _currentPageIndex = 0;
                 DisplayCurrentPage();
+                
+                // Auto-fit to width when first loading a document
+                FitToWidth();
             }
         }
 
@@ -1143,40 +1146,54 @@ namespace SnipperCloneCleanFinal.UI
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
 
-                _draggedDuringClick = false;
+                // Check for delete button clicks on new snip overlays
+                if (e.Button == MouseButtons.Left && _currentDocument != null && ThisAddIn.Instance?.Snips != null)
+                {
+                    foreach (var s in ThisAddIn.Instance.Snips.All)
+                    {
+                        if (s.DocPath == _currentDocument.FilePath && s.PageIndex == _currentPageIndex)
+                        {
+                            var scaledBounds = ScaleRect(s.Bounds);
+                            var deleteBox = new System.Drawing.Rectangle(
+                                scaledBounds.Right - 12, scaledBounds.Top, 12, 12);
+                            if (deleteBox.Contains(e.Location))
+                            {
+                                DeleteSnip(s);
+                                return;
+                            }
+                        }
+                    }
+                }
 
-                // Handle middle mouse button for panning
-                if (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && !_isSnipMode))
+                // Check for delete button clicks on DataSnipper snips
+                if (e.Button == MouseButtons.Left && _currentDocument != null)
+                {
+                    var allDataSnipperSnips = Core.DataSnipperFormulas.GetAllSnips();
+                    foreach (var kvp in allDataSnipperSnips)
+                    {
+                        var snipData = kvp.Value;
+                        if (snipData.DocumentPath == _currentDocument.FilePath && snipData.PageNumber == _currentPageIndex + 1)
+                        {
+                            var scaledBounds = ScaleRect(snipData.Bounds.ToDrawingRectangle());
+                            var deleteBox = new System.Drawing.Rectangle(
+                                scaledBounds.Right - 12, scaledBounds.Top, 12, 12);
+                            if (deleteBox.Contains(e.Location))
+                            {
+                                DeleteDataSnipperSnip(kvp.Key);
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Handle middle mouse button OR Ctrl+Left click for panning
+                if (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && Control.ModifierKeys == Keys.Control))
                 {
                     _isPanning = true;
                     _panStartPoint = e.Location;
                     _panStartScrollPosition = _viewerPanel.AutoScrollPosition;
                     _documentPictureBox.Cursor = Cursors.Hand;
                     return;
-                }
-
-                if (!_isSnipMode && e.Button == MouseButtons.Left && _currentDocument != null)
-                {
-                    foreach (var snip in _permanentSnips.Where(s => s.PageIndex == _currentPageIndex && s.DocumentPath == _currentDocument.FilePath))
-                    {
-                        var scaled = ScaleRect(snip.Bounds);
-                        var handle = GetHandleAtPoint(scaled, e.Location);
-                        if (handle != ResizeHandle.None)
-                        {
-                            _resizingSnip = snip;
-                            _resizeHandle = handle;
-                            _dragStart = e.Location;
-                            _documentPictureBox.Cursor = Cursors.SizeNWSE;
-                            return;
-                        }
-                        if (scaled.Contains(e.Location))
-                        {
-                            _draggingSnip = snip;
-                            _dragStart = e.Location;
-                            _documentPictureBox.Cursor = Cursors.SizeAll;
-                            return;
-                        }
-                    }
                 }
 
                 if (_adjustingTable)
@@ -1344,93 +1361,39 @@ namespace SnipperCloneCleanFinal.UI
                 if (_documentPictureBox == null || _documentPictureBox.IsDisposed)
                     return;
 
-                // Handle panning
+                // Handle panning - only if actively dragging with button held down
                 if (_isPanning)
                 {
-                    var deltaX = _panStartPoint.X - e.Location.X;
-                    var deltaY = _panStartPoint.Y - e.Location.Y;
-                    
-                    var newScrollX = Math.Abs(_panStartScrollPosition.X) + deltaX;
-                    var newScrollY = Math.Abs(_panStartScrollPosition.Y) + deltaY;
-                    
-                    // Clamp to valid scroll bounds
-                    newScrollX = Math.Max(0, Math.Min(newScrollX, 
-                        Math.Max(0, _viewerPanel.AutoScrollMinSize.Width - _viewerPanel.ClientSize.Width)));
-                    newScrollY = Math.Max(0, Math.Min(newScrollY, 
-                        Math.Max(0, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.ClientSize.Height)));
-                    
-                    _viewerPanel.AutoScrollPosition = new Point(newScrollX, newScrollY);
-                    return;
-                }
-
-                if (_resizingSnip != null)
-                {
-                    int dx = e.X - _dragStart.X;
-                    int dy = e.Y - _dragStart.Y;
-                    if (dx != 0 || dy != 0)
-                        _draggedDuringClick = true;
-                    var rect = _resizingSnip.Bounds;
-
-                    switch (_resizeHandle)
+                    // Stop panning if no mouse button is pressed
+                    if (e.Button == MouseButtons.None)
                     {
-                        case ResizeHandle.TopLeft:
-                            rect.X += dx; rect.Y += dy; rect.Width -= dx; rect.Height -= dy; break;
-                        case ResizeHandle.Top:
-                            rect.Y += dy; rect.Height -= dy; break;
-                        case ResizeHandle.TopRight:
-                            rect.Y += dy; rect.Width += dx; rect.Height -= dy; break;
-                        case ResizeHandle.Right:
-                            rect.Width += dx; break;
-                        case ResizeHandle.BottomRight:
-                            rect.Width += dx; rect.Height += dy; break;
-                        case ResizeHandle.Bottom:
-                            rect.Height += dy; break;
-                        case ResizeHandle.BottomLeft:
-                            rect.X += dx; rect.Width -= dx; rect.Height += dy; break;
-                        case ResizeHandle.Left:
-                            rect.X += dx; rect.Width -= dx; break;
+                        _isPanning = false;
+                        _documentPictureBox.Cursor = _isSnipMode ? Cursors.Cross : Cursors.Default;
+                        return;
                     }
-
-                    // Ensure minimum size
-                    if (rect.Width < 5) rect.Width = 5;
-                    if (rect.Height < 5) rect.Height = 5;
-
-                    _resizingSnip.Bounds = rect;
-                    _dragStart = e.Location;
-                    SafeInvalidate();
-                    return;
-                }
-
-                if (_draggingSnip != null)
-                {
-                    var dx = e.X - _dragStart.X;
-                    var dy = e.Y - _dragStart.Y;
-                    if (dx != 0 || dy != 0)
-                        _draggedDuringClick = true;
-                    _draggingSnip.Bounds = new System.Drawing.Rectangle(_draggingSnip.Bounds.X + dx, _draggingSnip.Bounds.Y + dy, _draggingSnip.Bounds.Width, _draggingSnip.Bounds.Height);
-                    _dragStart = e.Location;
-                    SafeInvalidate();
-                    return;
-                }
-
-                if (!_isSnipMode && _currentDocument != null)
-                {
-                    foreach (var snip in _permanentSnips.Where(s => s.PageIndex == _currentPageIndex && s.DocumentPath == _currentDocument.FilePath))
+                    
+                    // Only pan if the correct mouse button is being held
+                    if (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && Control.ModifierKeys == Keys.Control))
                     {
-                        var scaled = ScaleRect(snip.Bounds);
-                        if (GetHandleAtPoint(scaled, e.Location) != ResizeHandle.None)
-                        {
-                            _documentPictureBox.Cursor = Cursors.SizeNWSE;
-                            return;
-                        }
-                        if (scaled.Contains(e.Location))
-                        {
-                            _documentPictureBox.Cursor = Cursors.SizeAll;
-                            return;
-                        }
+                        var deltaX = e.Location.X - _panStartPoint.X;
+                        var deltaY = e.Location.Y - _panStartPoint.Y;
+                        
+                        var newScrollX = -_panStartScrollPosition.X - deltaX;
+                        var newScrollY = -_panStartScrollPosition.Y - deltaY;
+                        
+                        // Clamp to valid scroll bounds
+                        var maxScrollX = Math.Max(0, _viewerPanel.AutoScrollMinSize.Width - _viewerPanel.ClientSize.Width);
+                        var maxScrollY = Math.Max(0, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.ClientSize.Height);
+                        
+                        newScrollX = Math.Max(0, Math.Min(newScrollX, maxScrollX));
+                        newScrollY = Math.Max(0, Math.Min(newScrollY, maxScrollY));
+                        
+                        _viewerPanel.AutoScrollPosition = new Point(newScrollX, newScrollY);
                     }
-                    _documentPictureBox.Cursor = Cursors.Default;
+                    return;
                 }
+
+
 
                 if (_draggingColumnIndex >= 0 && _adjustingTable)
                 {
@@ -1586,51 +1549,7 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
 
-        private ResizeHandle GetHandleAtPoint(System.Drawing.Rectangle rect, Point p)
-        {
-            var handleRects = new Dictionary<ResizeHandle, System.Drawing.Rectangle>
-            {
-                { ResizeHandle.TopLeft, new System.Drawing.Rectangle(rect.Left - HANDLE_SIZE/2, rect.Top - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.Top, new System.Drawing.Rectangle(rect.Left + rect.Width/2 - HANDLE_SIZE/2, rect.Top - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.TopRight, new System.Drawing.Rectangle(rect.Right - HANDLE_SIZE/2, rect.Top - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.Right, new System.Drawing.Rectangle(rect.Right - HANDLE_SIZE/2, rect.Top + rect.Height/2 - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.BottomRight, new System.Drawing.Rectangle(rect.Right - HANDLE_SIZE/2, rect.Bottom - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.Bottom, new System.Drawing.Rectangle(rect.Left + rect.Width/2 - HANDLE_SIZE/2, rect.Bottom - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.BottomLeft, new System.Drawing.Rectangle(rect.Left - HANDLE_SIZE/2, rect.Bottom - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) },
-                { ResizeHandle.Left, new System.Drawing.Rectangle(rect.Left - HANDLE_SIZE/2, rect.Top + rect.Height/2 - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE) }
-            };
 
-            foreach (var kvp in handleRects)
-            {
-                if (kvp.Value.Contains(p))
-                    return kvp.Key;
-            }
-            return ResizeHandle.None;
-        }
-
-        private void DrawResizeHandles(Graphics g, System.Drawing.Rectangle rect)
-        {
-            var handles = new[]
-            {
-                new Point(rect.Left, rect.Top), // TL
-                new Point(rect.Left + rect.Width/2, rect.Top), // Top
-                new Point(rect.Right, rect.Top), // TR
-                new Point(rect.Right, rect.Top + rect.Height/2), // Right
-                new Point(rect.Right, rect.Bottom), // BR
-                new Point(rect.Left + rect.Width/2, rect.Bottom), // Bottom
-                new Point(rect.Left, rect.Bottom), // BL
-                new Point(rect.Left, rect.Top + rect.Height/2), // Left
-            };
-
-            foreach (var pt in handles)
-            {
-                var handleRect = new System.Drawing.Rectangle(pt.X - HANDLE_SIZE/2, pt.Y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
-                using (var b = new SolidBrush(Color.White))
-                    g.FillRectangle(b, handleRect);
-                using (var p = new Pen(Color.Black, 1))
-                    g.DrawRectangle(p, handleRect);
-            }
-        }
 
         private void OnMouseUp(object sender, MouseEventArgs e)
         {
@@ -1666,7 +1585,7 @@ namespace SnipperCloneCleanFinal.UI
                     }
                 }
 
-                // Handle end of panning
+                // Handle end of panning - stop panning when any mouse button is released
                 if (_isPanning)
                 {
                     _isPanning = false;
@@ -1674,28 +1593,7 @@ namespace SnipperCloneCleanFinal.UI
                     return;
                 }
 
-                if (_resizingSnip != null)
-                {
-                    _documentPictureBox.Cursor = Cursors.Default;
-                    if (_draggedDuringClick)
-                        SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _resizingSnip });
-                    else
-                        SnipClicked?.Invoke(this, new SnipClickedEventArgs { Snip = _resizingSnip });
-                    _resizingSnip = null;
-                    _resizeHandle = ResizeHandle.None;
-                    return;
-                }
 
-                if (_draggingSnip != null)
-                {
-                    _documentPictureBox.Cursor = Cursors.Default;
-                    if (_draggedDuringClick)
-                        SnipMoved?.Invoke(this, new SnipMovedEventArgs { Snip = _draggingSnip });
-                    else
-                        SnipClicked?.Invoke(this, new SnipClickedEventArgs { Snip = _draggingSnip });
-                    _draggingSnip = null;
-                    return;
-                }
 
                 if (_draggingColumnIndex >= 0)
                 {
@@ -1737,7 +1635,19 @@ namespace SnipperCloneCleanFinal.UI
                     }
                     else
                     {
-                        ProcessSnip();
+                        // DUPLICATE PREVENTION: Check if a snip already exists at this location
+                        var existingSnip = CheckForDuplicateSnip(_currentSelection);
+                        if (existingSnip != null)
+                        {
+                            _statusLabel.Text = "Snip already exists at this location";
+                            Logger.Info($"Duplicate snip prevented at bounds: {_currentSelection}");
+                            MessageBox.Show("A snip already exists at this location. Please select a different area.", 
+                                "Snipper Pro", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        else
+                        {
+                            ProcessSnip();
+                        }
                     }
                 }
             }
@@ -1752,6 +1662,73 @@ namespace SnipperCloneCleanFinal.UI
             }
         }
 
+        private SnipRecord CheckForDuplicateSnip(System.Drawing.Rectangle newBounds)
+        {
+            const int OVERLAP_THRESHOLD = 50; // Percentage overlap that constitutes a duplicate
+            
+            if (_currentDocument == null) return null;
+            
+            // Check permanent snips
+            foreach (var existingSnip in _permanentSnips)
+            {
+                if (existingSnip.PageIndex == _currentPageIndex && 
+                    existingSnip.DocumentPath == _currentDocument.FilePath)
+                {
+                    var overlapPercentage = CalculateOverlapPercentage(newBounds, existingSnip.Bounds);
+                    if (overlapPercentage > OVERLAP_THRESHOLD)
+                    {
+                        return existingSnip;
+                    }
+                }
+            }
+            
+            // Check DataSnipper snips
+            try
+            {
+                var allDataSnipperSnips = Core.DataSnipperFormulas.GetAllSnips();
+                foreach (var kvp in allDataSnipperSnips)
+                {
+                    var snipData = kvp.Value;
+                    if (snipData.DocumentPath == _currentDocument.FilePath && 
+                        snipData.PageNumber == _currentPageIndex + 1)
+                    {
+                        var existingBounds = snipData.Bounds.ToDrawingRectangle();
+                        var overlapPercentage = CalculateOverlapPercentage(newBounds, existingBounds);
+                        if (overlapPercentage > OVERLAP_THRESHOLD)
+                        {
+                            // Create a temporary SnipRecord for consistent return type
+                            return new SnipRecord 
+                            { 
+                                Bounds = existingBounds, 
+                                DocumentPath = snipData.DocumentPath,
+                                PageIndex = snipData.PageNumber - 1,
+                                SnipId = kvp.Key
+                            };
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"Error checking DataSnipper duplicates: {ex.Message}");
+            }
+            
+            return null;
+        }
+        
+        private double CalculateOverlapPercentage(System.Drawing.Rectangle rect1, System.Drawing.Rectangle rect2)
+        {
+            var intersection = System.Drawing.Rectangle.Intersect(rect1, rect2);
+            if (intersection.IsEmpty) return 0;
+            
+            var intersectionArea = intersection.Width * intersection.Height;
+            var rect1Area = rect1.Width * rect1.Height;
+            var rect2Area = rect2.Width * rect2.Height;
+            var unionArea = rect1Area + rect2Area - intersectionArea;
+            
+            return unionArea > 0 ? (double)intersectionArea / unionArea * 100 : 0;
+        }
+
         private void OnPictureDoubleClick(object sender, EventArgs e)
         {
             if (_adjustingTable)
@@ -1764,6 +1741,8 @@ namespace SnipperCloneCleanFinal.UI
 
         private void ProcessSnip()
         {
+            if (_isProcessingSnip) return; // guard against accidental double invocation
+            _isProcessingSnip = true;
             try
             {
                 if (_currentDocument == null || _currentPageIndex >= _currentDocument.PageCount)
@@ -1827,39 +1806,44 @@ namespace SnipperCloneCleanFinal.UI
                     }
                 }
 
-                // OCR fallback if PDF text extraction failed or if document is an image
-                if (!success)
+                // Intelligent OCR fallback for tiny text or missing numbers
+                bool needsNumberOcr = (_currentSnipMode == SnipMode.Sum && (extractedNumbers == null || extractedNumbers.Length == 0))
+                                        || (_currentSnipMode == SnipMode.Table && string.IsNullOrWhiteSpace(extractedText));
+
+                if (!success || needsNumberOcr)
                 {
-                    Logger.Info("Using OCR fallback for text extraction");
-                    
-                    // Crop from the ORIGINAL page image (not the zoomed displayed image) for better OCR quality
+                    Logger.Info("Running high-resolution OCR fallback for small text");
                     Bitmap pageImage = _currentDocument.Pages[_currentPageIndex];
-                    using (var croppedImage = CropImageFromDisplayed(pageImage, selectionOnOriginal))
+                    using (var cropped = CropImageFromDisplayed(pageImage, selectionOnOriginal))
                     {
-                        if (croppedImage == null)
+                        if (cropped != null)
                         {
-                            _statusLabel.Text = "Failed to crop selected area";
-                            return;
-                        }
-                        
-                        var initResult = _ocrEngine.Initialize();
-                        if (!initResult)
-                        {
-                            _statusLabel.Text = "OCR engine failed to initialize";
-                            return;
+                            // Upscale 2× for better small-font recognition
+                            int scale = 2;
+                            using var hiRes = new Bitmap(cropped.Width * scale, cropped.Height * scale);
+                            using (var g = Graphics.FromImage(hiRes))
+                            {
+                                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                g.DrawImage(cropped, new System.Drawing.Rectangle(0, 0, hiRes.Width, hiRes.Height));
+                            }
+
+                            if (_ocrEngine.Initialize())
+                            {
+                                var ocr = _ocrEngine.RecognizeText(hiRes);
+                                if (!string.IsNullOrWhiteSpace(ocr.Text))
+                                {
+                                    extractedText = ocr.Text;
+                                    extractedNumbers = ocr.Numbers ?? extractedNumbers;
+                                    success = true;
+                                    Logger.Info("OCR fallback produced text length " + extractedText.Length);
+                                }
+                            }
                         }
 
-                        var ocrResult = _ocrEngine.RecognizeText(croppedImage);
-                        if (ocrResult.Success)
+                        if (!success)
                         {
-                            extractedText = ocrResult.Text;
-                            extractedNumbers = ocrResult.Numbers ?? new string[0];
-                            success = true;
-                            Logger.Info($"OCR extraction successful: '{extractedText.Substring(0, Math.Min(extractedText.Length, 50))}...'");
-                        }
-                        else
-                        {
-                            Logger.Info("OCR extraction failed");
+                            extractedText = "[No selectable text in region]";
+                            success = true; // We still allow snip to proceed with placeholder
                         }
                     }
                 }
@@ -1895,8 +1879,8 @@ namespace SnipperCloneCleanFinal.UI
                                 }
                                 else
                                 {
-                                    extractedValue = "No numbers found";
-                                    success = false;
+                                    extractedValue = "[No numbers detected]";
+                                    success = true; // Still succeed with meaningful message
                                 }
                             }
                             break;
@@ -1952,6 +1936,34 @@ namespace SnipperCloneCleanFinal.UI
                             extractedValue = "✗ EXCEPTION";
                             success = true;
                             break;
+                        case SnipMode.Image:
+                            {
+                                using var cropped = CropImageFromDisplayed(displayedImage, _currentSelection);
+                                if (cropped != null)
+                                {
+                                    var prep = new SnipperCloneCleanFinal.Core.ImagePreprocessor();
+                                    using var cleaned = prep.Clean(cropped);
+                                    // Insert into Excel via helper
+                                    if (ThisAddIn.Instance?.Application != null)
+                                    {
+                                        using var helper = new SnipperCloneCleanFinal.Core.ExcelHelper(ThisAddIn.Instance.Application);
+                                        helper.InsertPictureAtSelection(cleaned);
+                                        extractedValue = "[Image inserted]";
+                                        success = true;
+                                    }
+                                    else
+                                    {
+                                        extractedValue = "[Unable to access Excel]";
+                                        success = false;
+                                    }
+                                }
+                                else
+                                {
+                                    extractedValue = "[Unable to capture image]";
+                                    success = false;
+                                }
+                                break;
+                            }
                         default:
                             extractedValue = extractedText.Trim();
                             break;
@@ -1959,10 +1971,12 @@ namespace SnipperCloneCleanFinal.UI
                 }
                 else
                 {
+                    // This should never be reached now since we always succeed with meaningful content
                     extractedValue = _currentSnipMode == SnipMode.Validation ? "✓ VERIFIED" :
                                    _currentSnipMode == SnipMode.Exception ? "✗ EXCEPTION" : 
-                                   "EXTRACTION_FAILED";
-                    success = _currentSnipMode == SnipMode.Validation || _currentSnipMode == SnipMode.Exception;
+                                   "[No content available]";
+                    success = true; // Always succeed - we always provide meaningful content
+                    Logger.Info("Using final fallback - this should not normally happen");
                 }
                 
                 // Create the event args with real data
@@ -1980,20 +1994,6 @@ namespace SnipperCloneCleanFinal.UI
 
                 // Fire the event to send data to Excel
                 SnipAreaSelected?.Invoke(this, args);
-                
-                // Add to permanent snips collection for trashcan functionality and visual display
-                if (success)
-                {
-                    var snipRecord = new SnipRecord
-                    {
-                        Bounds = _currentSelection,
-                        Color = GetSnipColor(_currentSnipMode),
-                        PageIndex = _currentPageIndex,
-                        SnipMode = _currentSnipMode,
-                        DocumentPath = _currentDocument.FilePath
-                    };
-                    _permanentSnips.Add(snipRecord);
-                }
                 
                 // Update status with more specific feedback
                 if (args.Success)
@@ -2026,6 +2026,10 @@ namespace SnipperCloneCleanFinal.UI
             {
                 Logger.Error($"Error processing snip: {ex.Message}", ex);
                 _statusLabel.Text = $"Error processing snip: {ex.Message}";
+            }
+            finally
+            {
+                _isProcessingSnip = false;
             }
         }
 
@@ -2279,45 +2283,137 @@ namespace SnipperCloneCleanFinal.UI
                 }
             }
             
+            // Draw new snip overlays with delete buttons
+            if (_currentDocument != null && ThisAddIn.Instance?.Snips != null)
+            {
+                // Build lookup of existing DataSnipper snips on this page to prevent double-drawing
+                List<Core.Rectangle> dsPageSnips = new List<Core.Rectangle>();
+                try
+                {
+                    var allDataSnips = Core.DataSnipperFormulas.GetAllSnips();
+                    foreach (var kv in allDataSnips)
+                    {
+                        var d = kv.Value;
+                        if (d.DocumentPath == _currentDocument.FilePath && d.PageNumber == _currentPageIndex + 1)
+                        {
+                            dsPageSnips.Add(d.Bounds);
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+
+                foreach (var s in ThisAddIn.Instance.Snips.All)
+                {
+                    if (s.DocPath != _currentDocument.FilePath || s.PageIndex != _currentPageIndex)
+                        continue;
+
+                    bool overlapsDataSnip = dsPageSnips.Any(ds =>
+                    {
+                        var dsRect = ds.ToDrawingRectangle();
+                        double overlap = CalculateOverlapPercentage(s.Bounds, dsRect);
+                        return overlap > 80; // treat as same snip
+                    });
+
+                    if (overlapsDataSnip)
+                        continue; // skip duplicate visual
+
+                    var scaledBounds = ScaleRect(s.Bounds);
+
+                    using var pen = new Pen(Color.Lime, 2);
+                    e.Graphics.DrawRectangle(pen, scaledBounds);
+
+                    // draw red X box
+                    var deleteBox = new System.Drawing.Rectangle(
+                        scaledBounds.Right - 12, scaledBounds.Top, 12, 12);
+                    e.Graphics.FillRectangle(Brushes.Red, deleteBox);
+                    e.Graphics.DrawString("×", this.Font, Brushes.White,
+                                          deleteBox.Left, deleteBox.Top - 2);
+                }
+            }
+
             // Draw permanent snips and their trash icons
             if (_currentDocument != null)
             {
-                var currentPageSnips = _permanentSnips.Where(s => 
-                    s.PageIndex == _currentPageIndex && 
-                    s.DocumentPath == _currentDocument.FilePath).ToList();
-                
-                foreach (var snip in currentPageSnips)
+                foreach (var snip in _permanentSnips)
                 {
-                    var scaledBounds = ScaleRect(snip.Bounds);
+                    // If a SnipId is assigned this snip also exists in DataSnipper collection – avoid drawing twice
+                    if (!string.IsNullOrEmpty(snip.SnipId))
+                        continue;
 
-                    // Draw snip rectangle
-                    using (var pen = new Pen(snip.Color, 3))
+                    var bounds = ScaleRect(snip.Bounds);
+                    using (var pen = new Pen(snip.Color, 2))
                     {
-                        e.Graphics.DrawRectangle(pen, scaledBounds);
+                        e.Graphics.DrawRectangle(pen, bounds);
                     }
-
-                    // Draw semi-transparent overlay
-                    using (var brush = new SolidBrush(Color.FromArgb(30, snip.Color)))
-                    {
-                        e.Graphics.FillRectangle(brush, scaledBounds);
-                    }
-
-                    // Draw resize handles
-                    DrawResizeHandles(e.Graphics, scaledBounds);
-
                     // Draw trash icon
-                    var trashRect = new System.Drawing.Rectangle(
-                        scaledBounds.Right - TRASH_SIZE,
-                        scaledBounds.Top,
-                        TRASH_SIZE,
-                        TRASH_SIZE);
+                    var trashRect = new System.Drawing.Rectangle(bounds.Right - TRASH_SIZE, bounds.Top, TRASH_SIZE, TRASH_SIZE);
                     e.Graphics.DrawImage(_trashIcon, trashRect);
                 }
+            }
+
+            // Draw DataSnipper snips with delete buttons
+            if (_currentDocument != null)
+            {
+                var allDataSnipperSnips = Core.DataSnipperFormulas.GetAllSnips();
+                foreach (var kvp in allDataSnipperSnips)
+                {
+                    var snipData = kvp.Value;
+                    if (snipData.DocumentPath == _currentDocument.FilePath && snipData.PageNumber == _currentPageIndex + 1)
+                    {
+                        var scaledBounds = ScaleRect(snipData.Bounds.ToDrawingRectangle());
+                        
+                        // Get color based on snip type
+                        var snipColor = GetSnipColor(snipData.Type);
+                        
+                        // Draw snip rectangle
+                        using (var pen = new Pen(snipColor, 2))
+                        {
+                            e.Graphics.DrawRectangle(pen, scaledBounds);
+                        }
+                        
+                        // Draw semi-transparent overlay
+                        using (var brush = new SolidBrush(Color.FromArgb(30, snipColor)))
+                        {
+                            e.Graphics.FillRectangle(brush, scaledBounds);
+                        }
+                        
+                        // Draw delete button (red X)
+                        var deleteBox = new System.Drawing.Rectangle(
+                            scaledBounds.Right - 12, scaledBounds.Top, 12, 12);
+                        e.Graphics.FillRectangle(Brushes.Red, deleteBox);
+                        e.Graphics.DrawString("×", this.Font, Brushes.White,
+                                              deleteBox.Left, deleteBox.Top - 2);
+                    }
+                }
+            }
+
+            // Draw highlight once flash effect
+            if (!_highlightOnceRect.IsEmpty && _highlightFlashCount > 0)
+            {
+                var alpha = _highlightFlashCount % 2 == 0 ? 180 : 80; // Flash effect
+                using var pen = new Pen(Color.FromArgb(alpha, Color.Red), 4);
+                using var brush = new SolidBrush(Color.FromArgb(alpha / 3, Color.Red));
+                e.Graphics.FillRectangle(brush, _highlightOnceRect);
+                e.Graphics.DrawRectangle(pen, _highlightOnceRect);
             }
         }
 
         public void HighlightRegion(System.Drawing.Rectangle region, Color color)
         {
+            // Prevent duplicate overlays: check existing permanent snips for high overlap
+            const int OVERLAP_THRESHOLD = 90; // percentage
+            foreach (var snip in _permanentSnips)
+            {
+                if (snip.PageIndex == _currentPageIndex && snip.DocumentPath == _currentDocument?.FilePath)
+                {
+                    var overlap = CalculateOverlapPercentage(region, snip.Bounds);
+                    if (overlap > OVERLAP_THRESHOLD)
+                    {
+                        // Already highlighted
+                        return;
+                    }
+                }
+            }
             // Create a temporary snip record for external highlighting
             if (_currentDocument != null)
             {
@@ -2526,18 +2622,18 @@ namespace SnipperCloneCleanFinal.UI
             }
             else
             {
-                // Regular mouse wheel = scroll
-                var scrollAmount = e.Delta / 3; // Adjust scroll sensitivity
+                // Regular mouse wheel = scroll (direct, no smooth scrolling)
+                var scrollAmount = e.Delta / 6; // More conservative scroll amount
                 
                 if (ModifierKeys.HasFlag(Keys.Shift))
                 {
                     // Shift + wheel = horizontal scroll
-                    SmoothScrollHorizontal(scrollAmount);
+                    DirectScrollHorizontal(scrollAmount);
                 }
                 else
                 {
                     // Vertical scroll
-                    SmoothScrollVertical(scrollAmount);
+                    DirectScrollVertical(scrollAmount);
                 }
             }
         }
@@ -2669,42 +2765,91 @@ namespace SnipperCloneCleanFinal.UI
                     break;
                     
                 case Keys.Up:
-                    SmoothScrollVertical(50);
+                    DirectScrollVertical(50);
                     e.Handled = true;
                     break;
                     
                 case Keys.Down:
-                    SmoothScrollVertical(-50);
+                    DirectScrollVertical(-50);
                     e.Handled = true;
                     break;
             }
         }
         
+        private void DirectScrollVertical(int amount)
+        {
+            try
+            {
+                var currentPos = _viewerPanel.AutoScrollPosition;
+                var newY = Math.Abs(currentPos.Y) - amount; // Positive amount = scroll up
+                
+                var maxScrollY = Math.Max(0, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.ClientSize.Height);
+                newY = Math.Max(0, Math.Min(newY, maxScrollY));
+                
+                _viewerPanel.AutoScrollPosition = new Point(Math.Abs(currentPos.X), newY);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"DirectScrollVertical error: {ex.Message}");
+            }
+        }
+
         private void SmoothScrollVertical(int amount)
         {
-            _targetScrollPosition = new Point(
-                _viewerPanel.AutoScrollPosition.X,
-                Math.Max(-_viewerPanel.AutoScrollMinSize.Height + _viewerPanel.Height,
-                    Math.Min(0, _viewerPanel.AutoScrollPosition.Y + amount))
-            );
+            var currentX = Math.Abs(_viewerPanel.AutoScrollPosition.X);
+            var currentY = Math.Abs(_viewerPanel.AutoScrollPosition.Y);
+            var newY = currentY - amount; // Negative amount scrolls down
+            
+            var maxScrollY = Math.Max(0, _viewerPanel.AutoScrollMinSize.Height - _viewerPanel.ClientSize.Height);
+            newY = Math.Max(0, Math.Min(newY, maxScrollY));
+            
+            _targetScrollPosition = new Point(currentX, newY);
             StartSmoothScroll();
         }
         
+        private void DirectScrollHorizontal(int amount)
+        {
+            try
+            {
+                var currentPos = _viewerPanel.AutoScrollPosition;
+                var newX = Math.Abs(currentPos.X) - amount; // Positive amount = scroll left
+                
+                var maxScrollX = Math.Max(0, _viewerPanel.AutoScrollMinSize.Width - _viewerPanel.ClientSize.Width);
+                newX = Math.Max(0, Math.Min(newX, maxScrollX));
+                
+                _viewerPanel.AutoScrollPosition = new Point(newX, Math.Abs(currentPos.Y));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"DirectScrollHorizontal error: {ex.Message}");
+            }
+        }
+
         private void SmoothScrollHorizontal(int amount)
         {
-            _targetScrollPosition = new Point(
-                Math.Max(-_viewerPanel.AutoScrollMinSize.Width + _viewerPanel.Width,
-                    Math.Min(0, _viewerPanel.AutoScrollPosition.X + amount)),
-                _viewerPanel.AutoScrollPosition.Y
-            );
+            var currentX = Math.Abs(_viewerPanel.AutoScrollPosition.X);
+            var currentY = Math.Abs(_viewerPanel.AutoScrollPosition.Y);
+            var newX = currentX - amount; // Negative amount scrolls right
+            
+            var maxScrollX = Math.Max(0, _viewerPanel.AutoScrollMinSize.Width - _viewerPanel.ClientSize.Width);
+            newX = Math.Max(0, Math.Min(newX, maxScrollX));
+            
+            _targetScrollPosition = new Point(newX, currentY);
             StartSmoothScroll();
         }
         
         private void StartSmoothScroll()
         {
+            // Temporarily disabled - causing issues
+            // Will re-enable once scrolling logic is stable
+            return;
+            
             if (!_smoothScrollActive)
             {
-                _currentScrollPosition = _viewerPanel.AutoScrollPosition;
+                _currentScrollPosition = new Point(
+                    Math.Abs(_viewerPanel.AutoScrollPosition.X),
+                    Math.Abs(_viewerPanel.AutoScrollPosition.Y)
+                );
                 _smoothScrollActive = true;
                 _smoothScrollTimer.Start();
             }
@@ -2730,9 +2875,10 @@ namespace SnipperCloneCleanFinal.UI
                 );
             }
             
+            // AutoScrollPosition expects positive values but returns negative ones
             _viewerPanel.AutoScrollPosition = new Point(
-                Math.Abs(_currentScrollPosition.X),
-                Math.Abs(_currentScrollPosition.Y)
+                _currentScrollPosition.X,
+                _currentScrollPosition.Y
             );
         }
         
@@ -2858,27 +3004,6 @@ namespace SnipperCloneCleanFinal.UI
                 Logger.Info("DocumentViewer disposed");
             }
             base.Dispose(disposing);
-        }
-
-        private LoadedDocument LoadImageDocument(string filePath)
-        {
-            try
-            {
-                var image = new Bitmap(filePath);
-                return new LoadedDocument
-                {
-                    FilePath = filePath,
-                    Name = Path.GetFileName(filePath),
-                    Type = DocumentType.Image,
-                    Pages = new List<Bitmap> { image },
-                    PageCount = 1
-                };
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"Error loading image {filePath}: {ex.Message}", ex);
-                return null;
-            }
         }
 
         private int EstimatePdfPages(byte[] pdfBytes)
@@ -4282,6 +4407,123 @@ namespace SnipperCloneCleanFinal.UI
             ClearSearch();
         }
 
+        public void LoadDocumentIfNeeded(string docPath)
+        {
+            var doc = _loadedDocuments.FirstOrDefault(d => d.FilePath == docPath);
+            if (doc == null)
+            {
+                // Load the document if not already loaded
+                LoadDocument(docPath);
+            }
+            else if (_currentDocument != doc)
+            {
+                // Switch to the document
+                _currentDocument = doc;
+                _documentSelector.SelectedIndex = _loadedDocuments.IndexOf(doc);
+                DisplayCurrentPage();
+            }
+        }
+
+        public void ScrollToPage(int pageIndex)
+        {
+            if (pageIndex >= 0 && pageIndex < (_currentDocument?.PageCount ?? 0))
+            {
+                _currentPageIndex = pageIndex;
+                DisplayCurrentPage();
+            }
+        }
+
+        private System.Drawing.Rectangle _highlightOnceRect = System.Drawing.Rectangle.Empty;
+        private Timer _highlightTimer;
+        private int _highlightFlashCount = 0;
+
+        public void HighlightOnce(System.Drawing.Rectangle bounds)
+        {
+            _highlightOnceRect = ScaleRect(bounds);
+            _highlightFlashCount = 0;
+            
+            // Stop any existing highlight timer
+            _highlightTimer?.Stop();
+            _highlightTimer?.Dispose();
+            
+            // Start flash timer
+            _highlightTimer = new Timer();
+            _highlightTimer.Interval = 300;
+            _highlightTimer.Tick += OnHighlightFlash;
+            _highlightTimer.Start();
+            
+            // Initial flash
+            SafeInvalidate();
+        }
+        
+        private void OnHighlightFlash(object sender, EventArgs e)
+        {
+            _highlightFlashCount++;
+            if (_highlightFlashCount >= 4)
+            {
+                _highlightTimer.Stop();
+                _highlightTimer.Dispose();
+                _highlightTimer = null;
+                _highlightOnceRect = System.Drawing.Rectangle.Empty;
+            }
+            SafeInvalidate();
+        }
+
+        private void DeleteSnip(Core.SnipOverlay s)
+        {
+            ThisAddIn.Instance.Snips.Remove(s.Id);
+
+            try
+            {
+                var wb = ThisAddIn.Instance.Application.ActiveWorkbook;
+                var ws = wb.Worksheets[s.SheetName];
+                var range = ws.Range[s.CellAddr];
+                
+                // Complete cleanup - clear everything
+                range.ClearContents();  // Clear values and formulas
+                range.ClearComments();  // Clear any comments
+                range.ClearFormats();   // Clear formatting
+                range.ClearNotes();     // Clear notes
+                
+                // Also clear any hyperlinks
+                if (range.Hyperlinks.Count > 0)
+                {
+                    range.Hyperlinks.Delete();
+                }
+            }
+            catch { }
+
+            SafeInvalidate();
+        }
+
+        private void DeleteDataSnipperSnip(string snipId)
+        {
+            try
+            {
+                // Delete the snip using DataSnipperFormulas
+                bool deleted = Core.DataSnipperFormulas.DeleteSnip(snipId);
+                
+                if (deleted)
+                {
+                    _statusLabel.Text = $"Snip deleted: {snipId}";
+                    Logger.Info($"Successfully deleted DataSnipper snip: {snipId}");
+                }
+                else
+                {
+                    _statusLabel.Text = "Failed to delete snip";
+                    Logger.Error($"Failed to delete DataSnipper snip: {snipId}");
+                }
+                
+                // Refresh the display
+                SafeInvalidate();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Exception while deleting DataSnipper snip {snipId}: {ex.Message}", ex);
+                _statusLabel.Text = "Error deleting snip";
+            }
+        }
+
         private void ClearSearch()
         {
             _searchTextBox.Clear();
@@ -4329,26 +4571,8 @@ namespace SnipperCloneCleanFinal.UI
         public DateTime CreatedAt { get; set; } = DateTime.Now;
     }
 
-    public class SnipMovedEventArgs : EventArgs
-    {
-        public SnipRecord Snip { get; set; }
-    }
-
     public class SnipClickedEventArgs : EventArgs
     {
         public SnipRecord Snip { get; set; }
-    }
-
-    public enum ResizeHandle
-    {
-        None,
-        TopLeft,
-        Top,
-        TopRight,
-        Right,
-        BottomRight,
-        Bottom,
-        BottomLeft,
-        Left
     }
 }

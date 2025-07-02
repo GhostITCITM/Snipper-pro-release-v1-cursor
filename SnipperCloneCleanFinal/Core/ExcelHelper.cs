@@ -1,6 +1,10 @@
 using System;
 using Excel = Microsoft.Office.Interop.Excel;
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using Office = Microsoft.Office.Core;
 
 namespace SnipperCloneCleanFinal.Core
 {
@@ -86,6 +90,47 @@ namespace SnipperCloneCleanFinal.Core
             {
                 Debug.WriteLine($"ExcelHelper: Error getting selected cell address: {ex.Message}");
                 return string.Empty;
+            }
+        }
+
+        public void InsertPictureAtSelection(Bitmap image)
+        {
+            if (image == null) return;
+            try
+            {
+                var selection = _application.Selection as Excel.Range;
+                if (selection == null) return;
+
+                // Save image to temporary PNG
+                string tempPath = Path.Combine(Path.GetTempPath(), $"snip_{Guid.NewGuid()}.png");
+                image.Save(tempPath, ImageFormat.Png);
+
+                Excel.Worksheet sheet = selection.Worksheet;
+                // Calculate placement – align with top-left of the selection
+                float left = (float)selection.Left;
+                float top = (float)selection.Top;
+
+                // Scale image so it fits within a reasonable width (max cell width * 5)
+                float maxWidth = (float)(selection.Width * 5);
+                float scale = 1f;
+                if (image.Width > maxWidth)
+                {
+                    scale = maxWidth / image.Width;
+                }
+
+                float width = image.Width * scale;
+                float height = image.Height * scale;
+
+                Office.MsoTriState linkToFile = Office.MsoTriState.msoFalse;
+                Office.MsoTriState saveWithDoc = Office.MsoTriState.msoTrue;
+
+                var pic = sheet.Shapes.AddPicture(tempPath, linkToFile, saveWithDoc, left, top, width, height);
+                pic.LockAspectRatio = Office.MsoTriState.msoTrue;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ExcelHelper: Error inserting picture: {ex.Message}");
+                throw;
             }
         }
 

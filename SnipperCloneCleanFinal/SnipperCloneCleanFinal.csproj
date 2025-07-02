@@ -17,9 +17,10 @@
     <RegisterForComInterop>false</RegisterForComInterop>
     <UseWindowsForms>true</UseWindowsForms>
     <ComVisible>true</ComVisible>
-    <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>..\SnipperPro.snk</AssemblyOriginatorKeyFile>
+    <SignAssembly>false</SignAssembly>
+    <AssemblyOriginatorKeyFile></AssemblyOriginatorKeyFile>
     <LangVersion>8.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
@@ -101,15 +102,30 @@
       <HintPath>..\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
       <Private>True</Private>
     </Reference>
-
+    <Reference Include="OpenCvSharp">
+      <HintPath>..\packages\OpenCvSharp4.4.8.0.20230708\lib\net48\OpenCvSharp.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="PdfSharp">
+      <HintPath>..\packages\PdfSharp.1.50.5147\lib\net20\PdfSharp.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Net" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Include="ThisAddIn.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Core\DataSnipperFormulas.cs" />
+    <Compile Include="Core\DataSnipperPersistence.cs" />
     <Compile Include="Core\DocumentViewerManager.cs" />
+    <Compile Include="Core\FormulaParser.cs" />
+    <Compile Include="Core\ImageOcr.cs" />
     <Compile Include="Core\SnipEngine.cs" />
+    <Compile Include="Core\SnipManager.cs" />
+    <Compile Include="Core\SnipOverlay.cs" />
     <Compile Include="Core\SnipTypes.cs" />
     <Compile Include="Core\ExcelHelper.cs" />
     <Compile Include="Core\OCREngine.cs" />
@@ -125,6 +141,11 @@
     <Compile Include="UI\DocumentViewer.Designer.cs">
       <DependentUpon>DocumentViewer.cs</DependentUpon>
     </Compile>
+    <Compile Include="Core\ImagePreprocessor.cs" />
+    <Compile Include="Core\ImageToPdfConverter.cs" />
+    <Compile Include="Core\HandwritingRecognizer.cs" />
+    <Compile Include="Core\HandwritingOptimizer.cs" />
+    <Compile Include="Core\TrOCREngine.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -136,14 +157,28 @@
 
   <ItemGroup>
     <None Include="App.config" />
+    <!-- Ensure tessdata files (Tesseract language data) are copied alongside the DLL -->
+    <None Include="tessdata\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   
-  <!-- Copy native PDFium DLL after build -->
+  <!-- Copy native PDFium and OpenCV DLLs after build -->
   <Target Name="CopyNativeDlls" AfterTargets="Build">
     <Copy SourceFiles="..\packages\PdfiumViewer.Native.x86_64.no_v8-no_xfa.2018.4.8.256\Build\x64\pdfium.dll" 
           DestinationFolder="$(OutputPath)" 
           SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\OpenCvSharp4.runtime.win.4.8.0.20230708\runtimes\win-x64\native\OpenCvSharpExtern.dll" 
+          DestinationFolder="$(OutputPath)" 
+          SkipUnchangedFiles="true" />
+    <!-- Copy Tesseract native dependencies -->
+    <Copy SourceFiles="..\packages\Tesseract.5.2.0\x64\tesseract50.dll" 
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\Tesseract.5.2.0\x64\leptonica-1.82.0.dll" 
+          DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\Tesseract.5.2.0\x86\tesseract50.dll" DestinationFolder="$(OutputPath)" Condition="Exists('..\packages\Tesseract.5.2.0\x86\tesseract50.dll')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\packages\Tesseract.5.2.0\x86\leptonica-1.82.0.dll" DestinationFolder="$(OutputPath)" Condition="Exists('..\packages\Tesseract.5.2.0\x86\leptonica-1.82.0.dll')" SkipUnchangedFiles="true" />
   </Target>
 </Project> 

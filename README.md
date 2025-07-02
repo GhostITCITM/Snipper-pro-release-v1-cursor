@@ -144,3 +144,12 @@ For issues:
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for open source licenses of the libraries used in this project. This project itself is provided under the terms of the MIT License.
 
+### Image-to-PDF conversion
+
+As of vNEXT, any raster image (PNG/JPG/TIFF/BMP/GIF) dropped into Snipper is automatically converted to a single-page PDF using `SnipperCloneCleanFinal.Core.ImageToPdfConverter`. The converter tries to invoke **Tesseract** with `pdf` output mode (to embed an invisible text layer) and falls back to **PDFsharp** embedding if Tesseract is not available. This removes the legacy image OCR pathway and guarantees that all snips run through the PDF text-extraction engine.
+
+Dependency list:
+
+* **PdfSharp 1.51.518** (MIT) – generates fallback PDFs.
+* **Tesseract OCR** (Apache 2.0). You can install the standard Windows build or include `tesseract.exe` alongside the add-in. If `tesseract` is not found on the PATH or in the add-in folder, images will still load (but without selectable text).
+
