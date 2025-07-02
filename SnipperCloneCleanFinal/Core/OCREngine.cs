@@ -474,7 +474,12 @@ namespace SnipperCloneCleanFinal.Core
                     // Standard preprocessing for printed text
                     Cv2.CvtColor(mat, mat, ColorConversionCodes.BGR2GRAY);
                     Cv2.AdaptiveThreshold(mat, mat, 255, AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, 31, 10);
-                    Cv2.MorphologyEx(mat, mat, MorphTypes.Open, Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3)));
+                    // Use a gentler morphological step so small features like decimal
+                    // points survive the preprocessing. An elliptical 2x2 closing
+                    // preserves dots better than the previous 3x3 opening which could
+                    // erase them entirely.
+                    Cv2.MorphologyEx(mat, mat, MorphTypes.Close,
+                        Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(2, 2)));
                 }
                 
                 return MatToBitmap(mat);
@@ -654,13 +659,13 @@ namespace SnipperCloneCleanFinal.Core
             // Enhanced patterns for better number extraction
             var patterns = new[]
             {
-                @"\$?[\d,]+\.?\d*",                    // Currency with optional $
-                @"-?\d+\.?\d+",                        // Decimals with optional negative
-                @"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?",    // Thousands with optional decimal
-                @"\(\d+\.?\d*\)",                      // Accounting format negative
+                @"\$?[\d,.]+",                          // Currency with either decimal
+                @"-?\d+[.,]\d+",                        // Decimals with dot or comma
+                @"-?\d{1,3}(?:[ ,]\d{3})*(?:[.,]\d+)?", // Thousands with separators
+                @"\(\d+[.,]?\d*\)",                    // Accounting format negative
                 @"-?\d+",                              // Plain integers
-                @"\d+\.\d{2}%?",                       // Percentages
-                @"(?<=\s|^)-?\d+(?:\.\d+)?(?=\s|$)"   // Numbers with word boundaries
+                @"\d+[.,]\d{2}%?",                     // Percentages
+                @"(?<=\s|^)-?\d+(?:[.,]\d+)?(?=\s|$)"   // Numbers with word boundaries
             };
             
             foreach (var pattern in patterns)
@@ -668,19 +673,8 @@ namespace SnipperCloneCleanFinal.Core
                 var matches = Regex.Matches(text, pattern);
                 foreach (Match m in matches)
                 {
-                    var value = m.Value;
-                    
-                    // Clean the value
-                    value = value.Replace("$", "").Replace(",", "").Replace("%", "").Trim();
-                    
-                    // Handle accounting format negatives
-                    if (value.StartsWith("(") && value.EndsWith(")"))
-                    {
-                        value = "-" + value.Trim('(', ')');
-                    }
-                    
-                    // Validate and add if it's a valid number
-                    if (double.TryParse(value, out _) && !string.IsNullOrWhiteSpace(value))
+                    var value = m.Value.Trim();
+                    if (NumberHelper.TryParseFlexible(value, out var _))
                     {
                         numbers.Add(value);
                     }

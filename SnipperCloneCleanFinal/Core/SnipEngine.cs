@@ -142,18 +142,8 @@ namespace SnipperCloneCleanFinal.Core
                     var matches = System.Text.RegularExpressions.Regex.Matches(ocrResult.Text, pattern);
                     foreach (System.Text.RegularExpressions.Match match in matches)
                     {
-                        var value = match.Value
-                            .Replace("$", "")
-                            .Replace(",", "")
-                            .Trim();
-                        
-                        // Handle accounting format negatives
-                        if (value.StartsWith("(") && value.EndsWith(")"))
-                        {
-                            value = "-" + value.Trim('(', ')');
-                        }
-                        
-                        if (!foundNumbers.Contains(value) && double.TryParse(value, out double number))
+                        var value = match.Value.Trim();
+                        if (!foundNumbers.Contains(value) && NumberHelper.TryParseFlexible(value, out double number))
                         {
                             foundNumbers.Add(value);
                             sum += number;
