@@ -11,6 +11,7 @@ using SnipperCloneCleanFinal.Core;
 using SnipperCloneCleanFinal.Infrastructure;
 using CoreRectangle = SnipperCloneCleanFinal.Core.Rectangle;
 using System.Text;
+using System.Text.RegularExpressions;
 using PdfiumViewer;
 using Tesseract;
 
@@ -3305,7 +3306,8 @@ namespace SnipperCloneCleanFinal.UI
                     foreach (var columnLines in columnTexts)
                     {
                         // Get the text for this row from this column (or empty if column has fewer lines)
-                        string cellText = row < columnLines.Count ? columnLines[row] : "";
+                        string cellText = row < columnLines.Count ? columnLines[row] : string.Empty;
+                        cellText = FixNumberSpacing(cellText);
                         rowCells.Add(cellText);
                     }
                     
@@ -3344,7 +3346,18 @@ namespace SnipperCloneCleanFinal.UI
                 Logger.Error($"Error combining columns into rows: {ex.Message}", ex);
                 return "";
             }
-                }
+
+        }
+
+        // Remove spaces between digits so numbers like "1 234,56" are parsed correctly
+        private string FixNumberSpacing(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return input;
+
+            return Regex.Replace(input, @"(?<=\d)\s+(?=\d)", "");
+        }
+
         
         // Format text using column divider positions as guidelines
         private string FormatTextWithColumnDividers(string text, List<System.Drawing.Rectangle> columnDividers, System.Drawing.Rectangle tableArea)
