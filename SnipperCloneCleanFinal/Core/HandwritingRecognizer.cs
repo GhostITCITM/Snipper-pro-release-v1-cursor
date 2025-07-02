@@ -187,20 +187,8 @@ namespace SnipperCloneCleanFinal.Core
                 var matches = Regex.Matches(text, pattern);
                 foreach (Match m in matches)
                 {
-                    var value = m.Value;
-                    
-                    // Clean the value - remove internal spaces and standardize
-                    value = Regex.Replace(value, @"\s+", "");
-                    value = value.Replace("$", "").Replace(",", "").Trim();
-                    
-                    // Handle accounting format negatives
-                    if (value.StartsWith("(") && value.EndsWith(")"))
-                    {
-                        value = "-" + value.Trim('(', ')');
-                    }
-                    
-                    // Validate and add if it's a valid number
-                    if (double.TryParse(value, out _) && !string.IsNullOrWhiteSpace(value))
+                    var value = Regex.Replace(m.Value, @"\s+", "").Trim();
+                    if (NumberHelper.TryParseFlexible(value, out _))
                     {
                         numbers.Add(value);
                     }

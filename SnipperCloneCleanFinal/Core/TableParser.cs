@@ -45,10 +45,10 @@ namespace SnipperCloneCleanFinal.Core
                      cell.Contains("Description") || cell.Contains("Total") || cell.Contains("Item") ||
                      cell.Contains("Type") || cell.Contains("Status") || cell.Contains("Category")));
                      
-                bool hasNumbers = firstRow.Any(cell => 
-                    !string.IsNullOrEmpty(cell) && 
-                    cell.Any(char.IsDigit) && 
-                    decimal.TryParse(cell.Replace(",", "").Replace("$", ""), out _));
+                bool hasNumbers = firstRow.Any(cell =>
+                    !string.IsNullOrEmpty(cell) &&
+                    cell.Any(char.IsDigit) &&
+                    NumberHelper.TryParseFlexible(cell, out _));
                 
                 if (hasHeaderWords && !hasNumbers && tableData.Rows.Count > 1)
                 {

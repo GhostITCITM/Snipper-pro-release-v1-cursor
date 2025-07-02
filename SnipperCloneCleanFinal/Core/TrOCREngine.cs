@@ -512,15 +512,8 @@ namespace SnipperCloneCleanFinal.Core
                 var matches = Regex.Matches(text, pattern);
                 foreach (Match match in matches)
                 {
-                    var value = match.Value
-                        .Replace("$", "")
-                        .Replace(",", "")
-                        .Replace("%", "")
-                        .Replace("(", "-")
-                        .Replace(")", "")
-                        .Trim();
-
-                    if (double.TryParse(value, out _) && !numbers.Contains(value))
+                    var value = match.Value.Trim();
+                    if (NumberHelper.TryParseFlexible(value, out _) && !numbers.Contains(value))
                     {
                         numbers.Add(value);
                     }
