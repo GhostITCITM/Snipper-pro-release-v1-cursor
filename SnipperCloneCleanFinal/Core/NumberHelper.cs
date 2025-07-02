@@ -12,24 +12,46 @@ namespace SnipperCloneCleanFinal.Core
                 return false;
 
             var value = input.Trim();
-            value = value.Replace("$", "").Replace("%", "");
+
+            // Remove common currency/percentage symbols and whitespaces
+            value = value.Replace("$", string.Empty)
+                         .Replace("%", string.Empty)
+                         .Replace(" ", string.Empty);
 
             bool hasDot = value.Contains('.');
             bool hasComma = value.Contains(',');
 
-            if (hasComma && !hasDot)
+            if (hasDot && hasComma)
             {
-                // Assume comma is decimal separator
+                // Determine which comes first to guess thousands/decimal separator
+                int dotIndex = value.IndexOf('.');
+                int commaIndex = value.IndexOf(',');
+
+                if (dotIndex < commaIndex)
+                {
+                    // Format like 1.234,56 -> dot thousands, comma decimal
+                    value = value.Replace(".", string.Empty)
+                                 .Replace(',', '.');
+                }
+                else
+                {
+                    // Format like 1,234.56 -> comma thousands, dot decimal
+                    value = value.Replace(",", string.Empty);
+                }
+            }
+            else if (hasComma && !hasDot)
+            {
+                // Only commas present - treat as decimal separator
                 value = value.Replace(',', '.');
             }
             else
             {
-                // Remove thousands separators
-                value = value.Replace(",", "");
+                // Only dot or none - remove stray commas
+                value = value.Replace(",", string.Empty);
             }
 
-            value = value.Replace("(", "-").Replace(")", "");
-            value = value.Trim();
+            // Handle accounting format with parentheses
+            value = value.Replace("(", "-").Replace(")", string.Empty);
 
             return double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out number);
         }

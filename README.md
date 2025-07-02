@@ -5,6 +5,7 @@ A powerful Excel add-in for extracting data from PDFs and images, designed to wo
 ## 🚀 Features
 
 - **Table Snipping** - Extract tables from PDFs with column adjustment
+- **International Numbers** - Recognizes amounts with commas or dots as decimal separators
 - **Text Extraction** - Extract any text from documents  
 - **Sum Snip** - Automatically sum numbers in selected areas
 - **PDF & Image Support** - Full PDF rendering plus PNG, JPG, JPEG, BMP, TIFF, GIF
