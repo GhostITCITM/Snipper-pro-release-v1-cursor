@@ -60,3 +60,5 @@ vstor_redist.exe
 
 # Local configuration
 *.config.user
+
+__pycache__/
